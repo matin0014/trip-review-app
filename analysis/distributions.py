@@ -3,10 +3,11 @@
 Two charts, each produced for the RAW file and the CLEANED dataset (cleaned =
 every proposal auto-accepted via the engine's apply_all):
 
-1. **Activity duration by weekday** — activity duration is the gap between a
+1. **Activity duration by purpose** — activity duration is the gap between a
    trip's end and the next consecutive trip's start within a person-day; labelled
    by the activity's purpose = the EARLIER trip A's purpose (missing -> 'None').
-   Rendered as one stacked histogram per weekday.
+   Rendered as horizontal bars of AVERAGE duration per purpose (raw vs cleaned),
+   plus a per-weekday faceted version of the same.
 2. **Trip start times** — count of trips by hour of day, raw vs cleaned.
 
     python analysis/distributions.py [raw_xlsx]
@@ -19,7 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections import Counter
+from collections import defaultdict
 
 import matplotlib
 
@@ -36,10 +37,8 @@ from engine.loader import load_trips  # noqa: E402
 from engine.proposals import apply_all  # noqa: E402
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-DUR_MAX_MIN = 180          # activities longer than this fall in the top bin
-DUR_BIN_MIN = 15
-N_PURPOSES = 8             # top purposes kept distinct; the rest become CATCH_ALL
-CATCH_ALL = "(other purposes)"  # distinct from the real purpose literally named "Other"
+MIN_COUNT = 10             # overall: drop purposes with fewer activities (noisy averages)
+WEEKDAY_MIN_COUNT = 8      # per-weekday panel: higher bar (smaller samples) to suppress noise
 DEFAULT_RAW = os.path.join("data", "app_data_wave2_raw.xlsx")
 OUT_DIR = os.path.join("analysis", "output")
 
@@ -56,48 +55,73 @@ def activity_records(trips: list) -> list:
             dur = (b.start_ts - a.end_ts).total_seconds() / 60.0
             if dur < 0:
                 continue
-            recs.append((a.end_ts.strftime("%A"), a.purpose or "None", dur))
+            purpose = a.purpose or "None"
+            if purpose.strip().lower() == "empty":
+                purpose = "None"  # survey placeholder, not a real purpose
+            recs.append((a.end_ts.strftime("%A"), purpose, dur))
     return recs
 
 
-def purpose_categories(recs: list) -> list:
-    """Top purposes (kept distinct); everything else folds into CATCH_ALL."""
-    common = [p for p, _ in Counter(p for _, p, _ in recs).most_common(N_PURPOSES)]
-    common = list(dict.fromkeys(common))  # dedupe, preserve order
-    return common + [CATCH_ALL]
+def mean_hours_by_purpose(recs: list, min_count: int = 1) -> dict:
+    """purpose -> (mean duration in HOURS, n), keeping only purposes with >= min_count."""
+    vals: dict = defaultdict(list)
+    for _, purpose, dur in recs:
+        vals[purpose].append(dur)
+    return {p: (np.mean(v) / 60.0, len(v)) for p, v in vals.items() if len(v) >= min_count}
 
 
-def _category(purpose: str, categories: list) -> str:
-    return purpose if purpose in categories else CATCH_ALL
+def _ordered_purposes(raw_recs: list) -> list:
+    """Purposes (>= MIN_COUNT in raw) ordered ascending by mean duration, so the
+    longest activities sit at the TOP of a horizontal bar chart (photo style)."""
+    means = mean_hours_by_purpose(raw_recs, MIN_COUNT)
+    return sorted(means, key=lambda p: means[p][0])
 
 
-def chart_activity(recs: list, title: str, path: str, categories: list) -> None:
-    edges = list(range(0, DUR_MAX_MIN + DUR_BIN_MIN, DUR_BIN_MIN))
-    palette = {c: plt.cm.tab10(i % 10) for i, c in enumerate(categories)}
+def _grouped_barh(ax, purposes, raw_means, cleaned_means) -> None:
+    y = np.arange(len(purposes))
+    h = 0.4
+    ax.barh(y + h / 2, [raw_means.get(p, (0,))[0] for p in purposes],
+            height=h, color="tab:blue", label="raw")
+    ax.barh(y - h / 2, [cleaned_means.get(p, (0,))[0] for p in purposes],
+            height=h, color="tab:orange", label="cleaned")
+    ax.set_yticks(y)
+    ax.set_yticklabels(purposes)
+    ax.grid(axis="x", alpha=0.3)
 
-    fig, axes = plt.subplots(2, 4, figsize=(18, 8), sharex=True, sharey=True)
+
+def chart_activity_avg(raw_recs, cleaned_recs, purposes, path) -> None:
+    """Overall: average activity duration per purpose, raw vs cleaned (photo style)."""
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.5 * len(purposes))))
+    _grouped_barh(ax, purposes,
+                  mean_hours_by_purpose(raw_recs, MIN_COUNT),
+                  mean_hours_by_purpose(cleaned_recs, 1))
+    ax.set_xlabel("average activity duration (hours)")
+    ax.set_title("Average activity duration by purpose - raw vs cleaned")
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def chart_activity_weekday(raw_recs, cleaned_recs, purposes, path) -> None:
+    """Per-weekday facets of the same average-duration bars (unstacked)."""
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10), sharex=True)
     axes = axes.flatten()
     for wi, weekday in enumerate(WEEKDAYS):
         ax = axes[wi]
-        bottom = np.zeros(len(edges) - 1)
-        for c in categories:
-            durs = [
-                min(d, DUR_MAX_MIN - 1e-6)
-                for (w, p, d) in recs
-                if w == weekday and _category(p, categories) == c
-            ]
-            counts, _ = np.histogram(durs, bins=edges)
-            ax.bar(edges[:-1], counts, width=DUR_BIN_MIN, bottom=bottom,
-                   align="edge", color=palette[c], label=c)
-            bottom += counts
-        ax.set_title(f"{weekday}  (n={int(bottom.sum())})", fontsize=10)
-        ax.set_xlabel("activity duration (min, capped 180)")
-    axes[0].set_ylabel("count")
+        rr = [r for r in raw_recs if r[0] == weekday]
+        cc = [r for r in cleaned_recs if r[0] == weekday]
+        _grouped_barh(ax, purposes,
+                      mean_hours_by_purpose(rr, WEEKDAY_MIN_COUNT),
+                      mean_hours_by_purpose(cc, WEEKDAY_MIN_COUNT))
+        ax.set_title(f"{weekday}  (n={len(rr)})", fontsize=10)
+        ax.set_xlabel("avg duration (h)")
+        ax.tick_params(axis="y", labelsize=7)
     axes[7].axis("off")
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower right", ncol=2, fontsize=9,
-               title="activity purpose")
-    fig.suptitle(title, fontsize=14)
+    fig.legend(handles, labels, loc="lower right", fontsize=11)
+    fig.suptitle("Average activity duration by purpose, per weekday - raw vs cleaned",
+                 fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(path, dpi=110)
     plt.close(fig)
@@ -111,7 +135,7 @@ def chart_start_times(raw: list, cleaned: list, path: str) -> None:
     ax.set_xticks(range(24))
     ax.set_xlabel("hour of day")
     ax.set_ylabel("number of trips")
-    ax.set_title("Trip start times — raw vs cleaned")
+    ax.set_title("Trip start times - raw vs cleaned")
     ax.grid(alpha=0.3)
     ax.legend()
     fig.tight_layout()
@@ -130,25 +154,22 @@ def main() -> None:
 
     raw_recs = activity_records(raw)
     cleaned_recs = activity_records(cleaned)
-    categories = purpose_categories(raw_recs)
+    purposes = _ordered_purposes(raw_recs)
 
-    chart_activity(raw_recs, "Activity duration by weekday - RAW",
-                   os.path.join(OUT_DIR, "activity_raw.png"), categories)
-    chart_activity(cleaned_recs, "Activity duration by weekday - CLEANED",
-                   os.path.join(OUT_DIR, "activity_cleaned.png"), categories)
+    chart_activity_avg(raw_recs, cleaned_recs, purposes,
+                       os.path.join(OUT_DIR, "activity_avg.png"))
+    chart_activity_weekday(raw_recs, cleaned_recs, purposes,
+                           os.path.join(OUT_DIR, "activity_avg_by_weekday.png"))
     chart_start_times(raw, cleaned, os.path.join(OUT_DIR, "start_times.png"))
 
     print(f"raw trips: {len(raw)}   cleaned trips: {len(cleaned)}")
     print(f"activities (gaps): raw {len(raw_recs)}   cleaned {len(cleaned_recs)}")
-    rd = np.median([d for _, _, d in raw_recs]) if raw_recs else 0
-    cd = np.median([d for _, _, d in cleaned_recs]) if cleaned_recs else 0
-    print(f"median activity duration: raw {rd:.1f} min   cleaned {cd:.1f} min")
-    short_raw = sum(1 for _, _, d in raw_recs if d < 15)
-    short_cln = sum(1 for _, _, d in cleaned_recs if d < 15)
-    print(f"activities < 15 min: raw {short_raw}   cleaned {short_cln} "
-          f"({short_raw - short_cln} fewer after cleaning)")
-    print(f"purpose categories: {categories}")
-    print(f"wrote 3 PNGs to {OUT_DIR}/")
+    rm = mean_hours_by_purpose(raw_recs, MIN_COUNT)
+    cm = mean_hours_by_purpose(cleaned_recs, 1)
+    print("\navg activity duration by purpose (hours)  raw -> cleaned:")
+    for p in reversed(purposes):
+        print(f"  {p:<40} {rm[p][0]:5.2f} -> {cm.get(p,(0,))[0]:5.2f}   (n={rm[p][1]})")
+    print(f"\nwrote 3 PNGs to {OUT_DIR}/")
 
 
 if __name__ == "__main__":
