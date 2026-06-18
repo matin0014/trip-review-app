@@ -49,11 +49,11 @@ def leg(raw, v_kmh, end_lon_m, start_min, end_min, start_lon_m=0.0, route=None):
     )
 
 
-def pair(v_a, v_b, gap_m, gap_min, *, va_route=None):
+def pair(v_a, v_b, gap_m, gap_min, *, va_route=None, vb_route=None):
     """prev ends at lon 0 at t=10min; cur starts `gap_m` east at t=10+gap_min."""
     prev = leg(1, v_a, end_lon_m=0.0, start_min=8, end_min=10, route=va_route)
     cur = leg(2, v_b, end_lon_m=gap_m + 50, start_min=10 + gap_min,
-              end_min=10 + gap_min + 5, start_lon_m=gap_m)
+              end_min=10 + gap_min + 5, start_lon_m=gap_m, route=vb_route)
     return prev, cur
 
 
@@ -101,6 +101,13 @@ def test_pathological_impossible_speed_kept() -> None:
 
 def test_v_a_zero_kept() -> None:
     f = pair(0, 30, gap_m=1000, gap_min=10, va_route=stationary_route())
+    assert classify_pair(*f) is None
+
+
+def test_v_b_zero_kept_no_spurious_mode_change() -> None:
+    # cur is stationary (zero_move noise): fast v_A + v_B=0 used to read as a
+    # speed-class crossing and emit a spurious mode_change. Now kept (None).
+    f = pair(30, 0, gap_m=1000, gap_min=3, vb_route=stationary_route())
     assert classify_pair(*f) is None
 
 

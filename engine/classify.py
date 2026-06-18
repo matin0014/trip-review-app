@@ -72,9 +72,9 @@ def pair_geometry(prev: Trip, cur: Trip, params: Params = DEFAULT) -> PairEviden
 def classify_pair(prev: Trip, cur: Trip, params: Params = DEFAULT) -> "Flag | None":
     """Classify a consecutive pair via the locked ladder; None = keep (no flag).
 
-    Order: interim guards (pathological pair, then undefined `t`), the 200 m
-    contiguity gate, then the residual ladder with the symmetric mode-change
-    overturn inside the fragment branch.
+    Order: interim guards (pathological pair, then either leg speed undefined),
+    the 200 m contiguity gate, then the residual ladder with the symmetric
+    mode-change overturn inside the fragment branch.
     """
     ev = pair_geometry(prev, cur, params)
 
@@ -85,8 +85,11 @@ def classify_pair(prev: Trip, cur: Trip, params: Params = DEFAULT) -> "Flag | No
     if ev.gap_time_min < expected_time_min(ev.gap_distance_m, PATHOLOGICAL_KMH):
         return None
 
-    # Expected-time is undefined without a positive v_A -> keep (interim).
-    if ev.v_a_kmh <= 0:
+    # Either leg's speed must be positive: v_A anchors the expected time `t`, and
+    # a degenerate v_B (a stationary cur = zero_move noise) would spuriously read
+    # as a speed-class crossing in the mode-change guard. Either undefined leg
+    # speed -> keep; the per-trip zero_move handles the stationary leg.
+    if ev.v_a_kmh <= 0 or ev.v_b_kmh <= 0:
         return None
 
     # Contiguous: the chain is intact, nothing to propose.
