@@ -1,0 +1,4 @@
+# Dev-only tools, NOT bundled into the shipped PyInstaller app.
+# Install with:  python -m pip install -r requirements-dev.txt
+-r requirements.txt
+matplotlib>=3.5   # analysis/distributions.py charts only

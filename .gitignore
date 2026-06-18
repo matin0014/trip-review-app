@@ -14,6 +14,9 @@ sessions/
 # Raw participant data (privacy-sensitive; never commit)
 data/
 
+# Generated analysis charts
+analysis/output/
+
 # Build artifacts
 build/
 dist/
