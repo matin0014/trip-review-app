@@ -9,16 +9,20 @@ the reviewer's display. The only mixed-unit arithmetic — turning a distance an
 speed into a time — is confined to the two tiny helpers below, each unit-tested,
 so the rule logic itself carries no loose conversion factors.
 
-This module implements 2a (pair geometry + evidence). The decision ladder and
-zero_move land in 2b.
+This module implements 2a (pair geometry + evidence) and 2b (the decision ladder
++ zero_move).
 """
 
 from __future__ import annotations
 
 from engine.geo import haversine_m
-from engine.models import PairEvidence, Trip
+from engine.models import Flag, PairEvidence, Trip, TripEvidence
 from engine.params import DEFAULT, Params
-from engine.velocity import pair_speeds
+from engine.velocity import pair_speeds, trip_moving_speed
+
+# Implied-speed ceiling for the interim pathological guard: a pair whose gap could
+# only be crossed faster than this is a duplicate/overlap/glitch, left untouched.
+PATHOLOGICAL_KMH = 120.0
 
 
 def expected_time_min(gap_m: float, v_kmh: float) -> float:
@@ -63,3 +67,70 @@ def pair_geometry(prev: Trip, cur: Trip, params: Params = DEFAULT) -> PairEviden
         residual_min=residual_min,
         slack_b_min=slack_b_min,
     )
+
+
+def classify_pair(prev: Trip, cur: Trip, params: Params = DEFAULT) -> "Flag | None":
+    """Classify a consecutive pair via the locked ladder; None = keep (no flag).
+
+    Order: interim guards (pathological pair, then undefined `t`), the 200 m
+    contiguity gate, then the residual ladder with the symmetric mode-change
+    overturn inside the fragment branch.
+    """
+    ev = pair_geometry(prev, cur, params)
+
+    # Interim pathological guard (deferred proper handling): negative gap time,
+    # or an implied speed above the ceiling => duplicate/overlap/glitch -> keep.
+    if ev.gap_time_min <= 0:
+        return None
+    if ev.gap_time_min < expected_time_min(ev.gap_distance_m, PATHOLOGICAL_KMH):
+        return None
+
+    # Expected-time is undefined without a positive v_A -> keep (interim).
+    if ev.v_a_kmh <= 0:
+        return None
+
+    # Contiguous: the chain is intact, nothing to propose.
+    if ev.gap_distance_m <= params.gate_m:
+        return None
+
+    # v_A > 0 guaranteed these are set.
+    assert ev.residual_min is not None and ev.buffer_min is not None
+
+    if ev.residual_min < ev.buffer_min:  # travel-shaped at v_A
+        if _mode_mismatch(ev.v_a_kmh, ev.v_b_kmh, params):
+            flag_type, group = "mode_change", None  # different speed classes -> review
+        else:
+            flag_type, group = "fragment", min(prev.raw_row, cur.raw_row)  # merge
+    elif ev.residual_min <= ev.buffer_min + params.missing_band_min:
+        flag_type, group = "missing_trip", None
+    else:
+        flag_type, group = "missing_activity", None
+
+    return Flag(
+        flag_type=flag_type,
+        left=(prev.raw_row,),
+        right=(cur.raw_row,),
+        group=group,
+        evidence=ev,
+    )
+
+
+def classify_trip_zero_move(trip: Trip, params: Params = DEFAULT) -> "Flag | None":
+    """Per-trip zero_move: net displacement < 200 m AND median moving <= 10 km/h."""
+    displacement_m = haversine_m(
+        trip.start_lat, trip.start_lon, trip.end_lat, trip.end_lon
+    )
+    speed_kmh = trip_moving_speed(trip, params)
+    if displacement_m < params.zero_move_disp_m and speed_kmh <= params.zero_move_speed_kmh:
+        return Flag(
+            flag_type="zero_move",
+            trip=trip.raw_row,
+            evidence=TripEvidence(displacement_m=displacement_m, median_speed_kmh=speed_kmh),
+        )
+    return None
+
+
+def _mode_mismatch(v_a_kmh: float, v_b_kmh: float, params: Params) -> bool:
+    """Symmetric non-vehicular<->vehicular class crossing in either direction."""
+    low, high = params.mode_low_kmh, params.mode_high_kmh
+    return (v_a_kmh <= low and v_b_kmh >= high) or (v_a_kmh >= high and v_b_kmh <= low)

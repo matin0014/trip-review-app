@@ -69,3 +69,27 @@ class TripEvidence:
 
     displacement_m: float
     median_speed_kmh: float
+
+
+@dataclass(frozen=True)
+class Flag:
+    """One proposed change emitted by the classifier — a first-class object.
+
+    A PAIR flag (fragment / mode_change / missing_trip / missing_activity) sits
+    between two legs: `left` / `right` are the raw rows composing each leg (a
+    single row each at ingest; member SETS so the id stays stable after merges).
+    A PER-TRIP flag (zero_move) names one row in `trip` and leaves `left`/`right`
+    empty. `group` (= the lowest raw row) is set for fragments (the merge group).
+
+    `flag_id` is the content-derived id, backfilled in 2d (frozen, so via
+    `dataclasses.replace`). `evidence` is a `PairEvidence` or `TripEvidence`.
+    """
+
+    flag_type: str
+    left: tuple[int, ...] = ()
+    right: tuple[int, ...] = ()
+    trip: int | None = None
+    group: int | None = None
+    evidence: object = None
+    origin: str = "ingest"
+    flag_id: str | None = None
