@@ -11,6 +11,9 @@ venv/
 # Runtime session working dirs
 sessions/
 
+# Raw participant data (privacy-sensitive; never commit)
+data/
+
 # Build artifacts
 build/
 dist/
