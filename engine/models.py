@@ -42,3 +42,30 @@ class Trip:
     end_lat: float
     end_lon: float
     route: list[RoutePoint] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PairEvidence:
+    """The locked-rule numbers for one consecutive pair (A -> B).
+
+    All in human units (metres / km/h / minutes) so they read the same way the
+    rule and the reviewer's display speak. `residual_min` is SIGNED. Fields are
+    optional where a guard short-circuits before they can be computed (e.g.
+    `v_a` is 0, so `t`/`buffer`/`residual` are undefined)."""
+
+    gap_distance_m: float
+    gap_time_min: float
+    v_a_kmh: float
+    v_b_kmh: float
+    t_min: float | None = None
+    buffer_min: float | None = None
+    residual_min: float | None = None
+    slack_b_min: float | None = None
+
+
+@dataclass(frozen=True)
+class TripEvidence:
+    """The per-trip numbers behind a zero_move verdict (metres / km/h)."""
+
+    displacement_m: float
+    median_speed_kmh: float
