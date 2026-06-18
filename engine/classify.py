@@ -134,3 +134,36 @@ def _mode_mismatch(v_a_kmh: float, v_b_kmh: float, params: Params) -> bool:
     """Symmetric non-vehicular<->vehicular class crossing in either direction."""
     low, high = params.mode_low_kmh, params.mode_high_kmh
     return (v_a_kmh <= low and v_b_kmh >= high) or (v_a_kmh >= high and v_b_kmh <= low)
+
+
+def group_person_days(trips: list) -> dict:
+    """Group trips into person-days keyed by (person, start date), each sorted by
+    start time. The classifier's unit of work — pairs never cross a boundary."""
+    days: dict = {}
+    for t in trips:
+        days.setdefault((t.person, t.start_ts.date()), []).append(t)
+    for day in days.values():
+        day.sort(key=lambda t: t.start_ts)
+    return days
+
+
+def classify_day(day_trips: list, params: Params = DEFAULT) -> list:
+    """All flags for one person-day: consecutive-pair flags + per-trip zero_move."""
+    flags: list = []
+    for prev, cur in zip(day_trips, day_trips[1:]):
+        pair_flag = classify_pair(prev, cur, params)
+        if pair_flag is not None:
+            flags.append(pair_flag)
+    for trip in day_trips:
+        zm = classify_trip_zero_move(trip, params)
+        if zm is not None:
+            flags.append(zm)
+    return flags
+
+
+def classify_all(trips: list, params: Params = DEFAULT) -> list:
+    """Flags for the whole dataset, classified independently per person-day."""
+    flags: list = []
+    for day in group_person_days(trips).values():
+        flags.extend(classify_day(day, params))
+    return flags
