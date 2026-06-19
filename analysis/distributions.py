@@ -127,15 +127,21 @@ def chart_activity_weekday(raw_recs, cleaned_recs, purposes, path) -> None:
     plt.close(fig)
 
 
+def rounded_hour(ts) -> int:
+    """Start time rounded to the NEAREST hour: minute >= 30 rounds up, else down.
+    Wraps 24 -> 0 so a 23:30+ trip lands at midnight (hour-of-day is circular)."""
+    return (ts.hour + (1 if ts.minute >= 30 else 0)) % 24
+
+
 def chart_start_times(raw: list, cleaned: list, path: str) -> None:
     fig, ax = plt.subplots(figsize=(11, 5))
     for trips, label, color in [(raw, "raw", "tab:blue"), (cleaned, "cleaned", "tab:orange")]:
-        hours = np.bincount([t.start_ts.hour for t in trips], minlength=24)
+        hours = np.bincount([rounded_hour(t.start_ts) for t in trips], minlength=24)
         ax.plot(range(24), hours, marker="o", color=color, label=f"{label} (n={len(trips)})")
     ax.set_xticks(range(24))
-    ax.set_xlabel("hour of day")
+    ax.set_xlabel("hour of day (start time rounded to nearest hour)")
     ax.set_ylabel("number of trips")
-    ax.set_title("Trip start times - raw vs cleaned")
+    ax.set_title("Trip start times (rounded to nearest hour) - raw vs cleaned")
     ax.grid(alpha=0.3)
     ax.legend()
     fig.tight_layout()
