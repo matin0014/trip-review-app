@@ -27,3 +27,7 @@ Thumbs.db
 
 # Excel lock files
 ~$*.xlsx
+
+# Generated outputs (charts + the prototype viewer embed real GPS; regenerable)
+analysis/output/
+prototype/viewer.html
