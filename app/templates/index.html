@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Trip Review Tool</title>
+<style>
+ body{font-family:system-ui,Segoe UI,sans-serif;margin:0;background:#f7f8fa;color:#1f2430;
+      display:flex;min-height:100vh;align-items:center;justify-content:center}
+ .card{background:#fff;border:1px solid #e4e7ec;border-radius:14px;padding:32px 36px;width:440px;
+       box-shadow:0 4px 24px rgba(0,0,0,.05)}
+ h1{font-size:20px;margin:0 0 4px}
+ p.sub{color:#667085;margin:0 0 22px;font-size:14px}
+ #drop{border:2px dashed #cbd2dc;border-radius:12px;padding:38px 18px;text-align:center;
+       color:#667085;cursor:pointer;transition:.15s}
+ #drop.over{border-color:#3b82f6;background:#eff5ff;color:#3b82f6}
+ #drop b{color:#1f2430}
+ #name{margin-top:14px;font-size:13px;color:#1f2430;min-height:18px}
+ button{margin-top:18px;width:100%;padding:10px;border:0;border-radius:9px;background:#3b82f6;
+        color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+ button:disabled{background:#aac4f5;cursor:default}
+ input[type=file]{display:none}
+</style></head><body>
+<div class="card">
+ <h1>Trip Review Tool</h1>
+ <p class="sub">Drop a raw trip workbook (.xlsx) to load proposals.</p>
+ <form id="form" method="post" action="/upload" enctype="multipart/form-data">
+  <label id="drop" for="file">
+   <div>Drag &amp; drop a <b>.xlsx</b> here<br>or click to browse</div>
+  </label>
+  <input type="file" id="file" name="file" accept=".xlsx">
+  <div id="name"></div>
+  <button id="go" type="submit" disabled>Load proposals</button>
+ </form>
+</div>
+<script>
+ const drop=document.getElementById('drop'), file=document.getElementById('file'),
+       name=document.getElementById('name'), go=document.getElementById('go'),
+       form=document.getElementById('form');
+ function show(){const f=file.files[0]; if(f){name.textContent=f.name; go.disabled=false;}}
+ file.onchange=show;
+ ['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over');}));
+ ['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over');}));
+ drop.addEventListener('drop',ev=>{file.files=ev.dataTransfer.files; show();});
+ form.addEventListener('submit',()=>{go.disabled=true; go.textContent='Loading…';});
+</script>
+</body></html>
