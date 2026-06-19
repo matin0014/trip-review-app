@@ -133,15 +133,20 @@ def rounded_hour(ts) -> int:
     return (ts.hour + (1 if ts.minute >= 30 else 0)) % 24
 
 
-def chart_start_times(raw: list, cleaned: list, path: str) -> None:
+def chart_start_times(raw: list, cleaned: list, path: str, weekday_only: bool = False) -> None:
+    def keep(t) -> bool:
+        return t.start_ts.weekday() < 5 if weekday_only else True
+
     fig, ax = plt.subplots(figsize=(11, 5))
     for trips, label, color in [(raw, "raw", "tab:blue"), (cleaned, "cleaned", "tab:orange")]:
-        hours = np.bincount([rounded_hour(t.start_ts) for t in trips], minlength=24)
-        ax.plot(range(24), hours, marker="o", color=color, label=f"{label} (n={len(trips)})")
+        sel = [t for t in trips if keep(t)]
+        hours = np.bincount([rounded_hour(t.start_ts) for t in sel], minlength=24)
+        ax.plot(range(24), hours, marker="o", color=color, label=f"{label} (n={len(sel)})")
+    scope = "weekdays only (Mon-Fri)" if weekday_only else "all days"
     ax.set_xticks(range(24))
     ax.set_xlabel("hour of day (start time rounded to nearest hour)")
     ax.set_ylabel("number of trips")
-    ax.set_title("Trip start times (rounded to nearest hour) - raw vs cleaned")
+    ax.set_title(f"Trip start times, {scope} - raw vs cleaned")
     ax.grid(alpha=0.3)
     ax.legend()
     fig.tight_layout()
@@ -167,6 +172,8 @@ def main() -> None:
     chart_activity_weekday(raw_recs, cleaned_recs, purposes,
                            os.path.join(OUT_DIR, "activity_avg_by_weekday.png"))
     chart_start_times(raw, cleaned, os.path.join(OUT_DIR, "start_times.png"))
+    chart_start_times(raw, cleaned, os.path.join(OUT_DIR, "start_times_weekday.png"),
+                      weekday_only=True)
 
     print(f"raw trips: {len(raw)}   cleaned trips: {len(cleaned)}")
     print(f"activities (gaps): raw {len(raw_recs)}   cleaned {len(cleaned_recs)}")
@@ -175,7 +182,7 @@ def main() -> None:
     print("\navg activity duration by purpose (hours)  raw -> cleaned:")
     for p in reversed(purposes):
         print(f"  {p:<40} {rm[p][0]:5.2f} -> {cm.get(p,(0,))[0]:5.2f}   (n={rm[p][1]})")
-    print(f"\nwrote 3 PNGs to {OUT_DIR}/")
+    print(f"\nwrote 4 PNGs to {OUT_DIR}/")
 
 
 if __name__ == "__main__":
