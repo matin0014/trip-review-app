@@ -13,7 +13,7 @@ import os
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 
-from app import baseline, decisions, session
+from app import baseline, decisions, session, state
 from engine.classify import classify_all
 from engine.loader import load_trips
 
@@ -80,6 +80,31 @@ def create_app() -> Flask:
         accepted = decisions.replay(events)
         return jsonify({"accepted": sorted(accepted),
                         "n_accepted": len(accepted), "n_events": len(events)})
+
+    @app.get("/api/<sid>/live-day")
+    def api_live_day(sid):
+        if not session.exists(sid):
+            abort(404)
+        trips = state.day_trips(sid, request.args.get("key", ""))
+        if trips is None:
+            abort(404)
+
+        res = decisions.resolutions(session.read_events(sid))
+        accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
+        live_trips, surfaced = decisions.fixpoint(trips, accepted)
+
+        seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
+
+        def status(flag_id):
+            r = res.get(flag_id)
+            if r in decisions.APPLY_RESOLUTIONS:
+                return "accepted"
+            return "waived" if r in decisions.WAIVE_RESOLUTIONS else "pending"
+
+        return jsonify({
+            "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
+            "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
+        })
 
     @app.get("/api/<sid>/state")
     def api_state(sid):

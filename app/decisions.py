@@ -33,14 +33,13 @@ WAIVE_RESOLUTIONS = frozenset({"waive"})
 VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS
 
 
-def replay(events: list) -> set:
-    """Fold the append-only event log into the set of currently-applied flag ids.
+def resolutions(events: list) -> dict:
+    """Effective resolution per decided flag id, after undo/redo.
 
     Decisions are last-event-wins per flag id; `revert` / `redo` form a global
     LIFO over the decision events (a fresh decision clears the redo stack, so you
-    cannot redo past a new action). A flag id is in the returned set when its
-    effective resolution applies the change (accept / merge / reviewed); waived,
-    reverted, or never-decided flags are absent.
+    cannot redo past a new action). Flags never decided (or whose decision was
+    reverted) are simply absent from the returned map.
     """
     active: list = []  # decisions currently in effect, in chronological order
     redo: list = []    # decisions popped by revert, available to redo
@@ -60,7 +59,13 @@ def replay(events: list) -> set:
     effective: dict = {}
     for e in active:
         effective[e["flag_id"]] = e["resolution"]  # last active decision wins
-    return {fid for fid, res in effective.items() if res in APPLY_RESOLUTIONS}
+    return effective
+
+
+def replay(events: list) -> set:
+    """The set of currently-APPLIED flag ids (effective resolution applies the
+    change: accept / merge / reviewed). Waived or undecided flags are absent."""
+    return {fid for fid, res in resolutions(events).items() if res in APPLY_RESOLUTIONS}
 
 
 def fixpoint(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:

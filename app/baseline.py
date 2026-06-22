@@ -33,6 +33,35 @@ def _evidence(ev: object) -> dict:
     return out
 
 
+def serialize_trip(t, seq: int) -> dict:
+    """One trip -> JSON (rounded route; falls back to start/end if no breadcrumbs).
+
+    Shared by the baseline and the live recompute so the two never drift."""
+    route = [[_r(p.lat), _r(p.lon)] for p in t.route] or \
+            [[_r(t.start_lat), _r(t.start_lon)], [_r(t.end_lat), _r(t.end_lon)]]
+    return {
+        "seq": seq, "id": t.raw_row, "mode": t.mode, "purpose": t.purpose or "",
+        "start": t.start_ts.strftime("%H:%M"), "end": t.end_ts.strftime("%H:%M"),
+        "dur": round((t.end_ts - t.start_ts).total_seconds() / 60.0, 1),
+        "s": [_r(t.start_lat), _r(t.start_lon)],
+        "e": [_r(t.end_lat), _r(t.end_lon)],
+        "route": route,
+    }
+
+
+def serialize_flag(f, seq_of: dict, status: str = None) -> dict:
+    """One flag -> JSON. `seq_of` maps raw_row -> within-day seq (None if the
+    member is no longer a live trip, e.g. a consumed merge). `status` is set for
+    the live view (accepted / waived / pending), omitted for the baseline."""
+    seqs = [seq_of.get(f.trip)] if f.trip is not None \
+        else [seq_of.get(f.left[0]), seq_of.get(f.right[0])]
+    out = {"id": f.flag_id, "type": f.flag_type, "origin": f.origin,
+           "seqs": seqs, "ev": _evidence(f.evidence)}
+    if status is not None:
+        out["status"] = status
+    return out
+
+
 def build_baseline(trips: list, flags: list, raw_name: str) -> dict:
     """Assemble the proposals baseline keyed by ``"<person>|<date>"``."""
     flags = with_ids(flags)
@@ -50,32 +79,10 @@ def build_baseline(trips: list, flags: list, raw_name: str) -> dict:
     days: dict = {}
     for (person, date), day_trips in day_groups.items():
         seq_of = {t.raw_row: i for i, t in enumerate(day_trips, start=1)}
-
-        trips_json = []
-        for seq, t in enumerate(day_trips, start=1):
-            route = [[_r(p.lat), _r(p.lon)] for p in t.route] or \
-                    [[_r(t.start_lat), _r(t.start_lon)], [_r(t.end_lat), _r(t.end_lon)]]
-            trips_json.append({
-                "seq": seq, "id": t.raw_row, "mode": t.mode, "purpose": t.purpose or "",
-                "start": t.start_ts.strftime("%H:%M"), "end": t.end_ts.strftime("%H:%M"),
-                "dur": round((t.end_ts - t.start_ts).total_seconds() / 60.0, 1),
-                "s": [_r(t.start_lat), _r(t.start_lon)],
-                "e": [_r(t.end_lat), _r(t.end_lon)],
-                "route": route,
-            })
-
-        flags_json = []
-        for f in flags_by_day.get((person, date), []):
-            seqs = [seq_of.get(f.trip)] if f.trip is not None \
-                else [seq_of.get(f.left[0]), seq_of.get(f.right[0])]
-            flags_json.append({
-                "id": f.flag_id, "type": f.flag_type, "origin": f.origin,
-                "seqs": seqs, "ev": _evidence(f.evidence),
-            })
-
         days[f"{person}|{date}"] = {
             "person": person or "(unknown)", "date": str(date),
-            "trips": trips_json, "flags": flags_json,
+            "trips": [serialize_trip(t, seq) for seq, t in enumerate(day_trips, start=1)],
+            "flags": [serialize_flag(f, seq_of) for f in flags_by_day.get((person, date), [])],
         }
 
     return {
