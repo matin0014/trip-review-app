@@ -31,13 +31,13 @@ from engine.params import DEFAULT
 
 
 def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
-    """Return ``(rows, stubs)`` for one person-day.
+    """Return ``(rows, stub_trips)`` for one person-day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
-    excluded. `stubs` = ``[(left_row, right_row), ...]`` missing-trip bridges to
-    materialise as added rows (the caller assigns their global ``A`` numbers).
+    excluded. `stub_trips` = the materialised missing-trip stub `Trip`s (negative
+    raw_row) the caller turns into ``A`` rows (assigning their global numbers).
     """
-    _, surfaced = fixpoint(day_trips, accepted_ids, params)
+    live, surfaced = fixpoint(day_trips, accepted_ids, params)
     applied = [f for f in surfaced if f.flag_id in accepted_ids]
 
     parent: dict = {}
@@ -75,9 +75,10 @@ def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
         else:
             rows.append((t.raw_row, project_trip_id("keep", raw_row=t.raw_row)))
 
-    stubs = [(f.left[0], f.right[0]) for f in applied if f.flag_type == "missing_trip"
-             and f.left[0] not in removed and f.right[0] not in removed]
-    return rows, stubs
+    # fixpoint already inserted accepted missing_trip stubs (negative raw_row) with
+    # correct A.end->B.start bridging (even across merges) — just hand them back.
+    stub_trips = [t for t in live if t.raw_row < 0]
+    return rows, stub_trips
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -91,14 +92,27 @@ def _write_atomic_xlsx(df, out: str) -> None:
     os.replace(tmp, out)
 
 
-def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
-    """Read the raw workbook and return it with a `trip_id` column added and the
-    removed rows dropped. raw columns are preserved verbatim; trip_id labels each
-    surviving row (keep / M-merge). Skipped/unparsed raw rows stay as plain keeps.
+def _stub_row(stub) -> dict:
+    """Map a stub `Trip` onto the raw column names (others left blank)."""
+    return {
+        "accessCode": stub.person,
+        "start_date": stub.start_ts.strftime("%Y-%m-%d"),
+        "start_time": stub.start_ts.strftime("%H:%M:%S"),
+        "end_date": stub.end_ts.strftime("%Y-%m-%d"),
+        "end_time": stub.end_ts.strftime("%H:%M:%S"),
+        "mode_of_travel": stub.mode,
+        "purpose_of_travel": stub.purpose,
+        "start_latitude": stub.start_lat, "start_longitude": stub.start_lon,
+        "end_latitude": stub.end_lat, "end_longitude": stub.end_lon,
+        "routes": "[]",
+    }
 
-    NOTE: missing-trip `A`-stub rows are not materialised here yet (step 3, with
-    the Do-file); accepting a missing_trip currently leaves the gap unfilled in
-    the cleaned file.
+
+def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
+    """Read the raw workbook and return it with a `trip_id` column added, removed
+    rows dropped, and accepted missing-trip stubs appended as ``A`` rows. raw
+    columns are preserved verbatim; trip_id labels each row (keep / M-merge / A-add).
+    Skipped/unparsed raw rows stay as plain keeps.
     """
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
@@ -106,17 +120,30 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
     trips = load_trips(raw_path)
     tid: dict = {}
     removed: set = set()
+    stub_trips: list = []
     for day_trips in group_person_days(trips).values():
-        rows, _stubs = clean_day(day_trips, accepted_ids, params)
+        rows, stubs = clean_day(day_trips, accepted_ids, params)
         present = {r for r, _ in rows}
         for r, t in rows:
             tid[r] = t
         removed |= {x.raw_row for x in day_trips} - present
+        stub_trips += stubs
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
     keep = [(i + 1) not in removed for i in range(n)]
-    return df[keep].copy()
+    cleaned = df[keep].copy()
+
+    if stub_trips:  # materialise accepted missing-trip stubs as trailing A-rows
+        cols = list(cleaned.columns)
+        added = []
+        for i, stub in enumerate(stub_trips, start=1):
+            row = {c: None for c in cols}
+            row.update(_stub_row(stub))
+            row["trip_id"] = project_trip_id("add", add_counter=i)
+            added.append(row)
+        cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
+    return cleaned
 
 
 def generate_cleaned(sid: str, params=DEFAULT) -> str:

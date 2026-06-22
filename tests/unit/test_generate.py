@@ -64,4 +64,10 @@ def test_merge_wins_both_accepted_keeps_both_as_merge():
 def test_accept_missing_trip_yields_a_stub():
     trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 20, 25, 1000.0, 1050.0)]  # 10-min gap
     rows, stubs = clean_day(trips, {fid(trips, "missing_trip")})
-    assert rows == [(1, "1"), (2, "2")] and stubs == [(1, 2)]
+    assert rows == [(1, "1"), (2, "2")]
+    assert len(stubs) == 1
+    stub = stubs[0]
+    assert stub.raw_row < 0 and stub.route == [] and stub.mode == "Unknown"
+    # bridges A.end -> B.start
+    assert stub.start_ts == trips[0].end_ts and stub.end_ts == trips[1].start_ts
+    assert stub.start_lat == trips[0].end_lat and stub.end_lon == trips[1].start_lon
