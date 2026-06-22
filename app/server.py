@@ -13,7 +13,7 @@ import os
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 
-from app import baseline, session
+from app import baseline, decisions, session
 from engine.classify import classify_all
 from engine.loader import load_trips
 
@@ -73,6 +73,46 @@ def create_app() -> Flask:
         if day is None:
             abort(404)
         return jsonify(day)
+
+    def _state(sid):
+        """Current review state: which flag ids are applied, derived from the log."""
+        events = session.read_events(sid)
+        accepted = decisions.replay(events)
+        return jsonify({"accepted": sorted(accepted),
+                        "n_accepted": len(accepted), "n_events": len(events)})
+
+    @app.get("/api/<sid>/state")
+    def api_state(sid):
+        if not session.exists(sid):
+            abort(404)
+        return _state(sid)
+
+    @app.post("/api/<sid>/decision")
+    def api_decision(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        flag_id, resolution = body.get("flag_id"), body.get("resolution")
+        if not flag_id or resolution not in decisions.VALID_RESOLUTIONS:
+            abort(400, "require flag_id and a valid resolution "
+                       f"({', '.join(sorted(decisions.VALID_RESOLUTIONS))})")
+        session.append_event(sid, {"type": "decision", "flag_id": flag_id,
+                                   "resolution": resolution})
+        return _state(sid)
+
+    @app.post("/api/<sid>/undo")
+    def api_undo(sid):
+        if not session.exists(sid):
+            abort(404)
+        session.append_event(sid, {"type": "revert"})
+        return _state(sid)
+
+    @app.post("/api/<sid>/redo")
+    def api_redo(sid):
+        if not session.exists(sid):
+            abort(404)
+        session.append_event(sid, {"type": "redo"})
+        return _state(sid)
 
     return app
 
