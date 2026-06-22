@@ -20,7 +20,8 @@ from engine.ids import with_ids
 from engine.models import Trip
 
 
-def project(trips: list, flags: list, merge_types: tuple = ("fragment",)) -> list:
+def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
+            merge_wins: bool = False) -> list:
     """One apply pass (no cascade): remove zero_move trips -> merge the pairs in
     `merge_types` (transitive union, removed trips excluded) -> insert
     missing_trip stubs. Returns the projected trips sorted by (person, start_ts).
@@ -31,9 +32,21 @@ def project(trips: list, flags: list, merge_types: tuple = ("fragment",)) -> lis
     `mode_change` (its resolution is Merge). missing_activity / reviewed change no
     geometry. Stub raw_rows go one below the lowest existing row, so re-projecting
     an already-stubbed trip set never collides (the linchpin for the fixpoint loop).
+
+    `merge_wins` flips the zero_move-vs-merge precedence. By default zero_move
+    removal wins (Stage-2 boundary preservation: junk never drags a neighbour into
+    a merge). In the LIVE review path it is True: a trip that is a member of an
+    accepted merge is NOT removed by its own zero_move — the human's "these pieces
+    are one drive" dominates, the merge reconstitutes it, and the fixpoint then
+    re-classifies the merged trip (re-flagging zero_move only if it STILL barely
+    moved). This makes a fragment+zero_move pair resolve correctly in any order.
     """
     by_row = {t.raw_row: t for t in trips}
     removed = {f.trip for f in flags if f.flag_type == "zero_move"}
+    if merge_wins:
+        merge_members = {row for f in flags if f.flag_type in merge_types
+                         for row in (f.left[0], f.right[0])}
+        removed -= merge_members  # an accepted merge rescues its pieces from removal
 
     roots = _merge_roots(flags, removed, merge_types)
     groups: dict = defaultdict(list)

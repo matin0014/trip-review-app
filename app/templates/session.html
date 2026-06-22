@@ -75,6 +75,8 @@
    font-family:var(--mono);font-size:12px;color:var(--ink-600);cursor:pointer}
  .tools button:hover{background:var(--paper-100);color:var(--ink-900)}
  .tools .sp{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--slate-500)}
+ .tools .rng{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-600)}
+ .tools .rng input{width:40px;padding:3px 4px;border:1px solid var(--paper-300);border-radius:6px;font-family:var(--mono);font-size:12px;text-align:center}
 
  .row{padding:11px 14px;border-bottom:1px solid var(--paper-200);cursor:pointer;transition:background .12s}
  .row:hover{background:var(--paper-100)}
@@ -100,6 +102,15 @@
  .status.pending{color:var(--slate-500)}.status.accepted{color:var(--ok)}.status.waived{color:#b42318}
  .ev{font-family:var(--mono);font-size:12px;color:var(--ink-600);margin-top:5px}
  .empty{padding:14px;color:var(--slate-500);font-size:12px}
+ #resolved .flagrow{opacity:.7}
+ .flag-actions{display:flex;gap:6px;margin-top:9px}
+ .act{font-family:var(--sans);font-size:12px;font-weight:500;border:1px solid var(--paper-300);background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 13px;cursor:pointer}
+ .act:hover{background:var(--paper-100)}
+ .act.on{background:var(--cobalt-500);border-color:var(--cobalt-500);color:#fff}
+ .act.on.waive{background:var(--ink-700);border-color:var(--ink-700)}
+ .rewind button{border:1px solid var(--paper-300);background:var(--paper-0);border-radius:6px;padding:2px 9px;
+   font-family:var(--sans);font-size:11px;font-weight:500;color:var(--ink-600);cursor:pointer;margin-left:5px;text-transform:none;letter-spacing:0}
+ .rewind button:hover{background:var(--paper-100);color:var(--ink-900)}
 
  /* leaflet bits */
  .leaflet-div-icon{background:transparent;border:0}
@@ -137,13 +148,22 @@
    <div class="insp-hint"><span class="ic">⚠</span><span>Flags show their current status. Accept / waive arrives next — this view already reflects the live projection.</span></div>
    <div class="overline insp-sec">Trips <span class="aux" id="tcount"></span></div>
    <div class="tools">
-    <button id="bNone">None</button><button id="bMinus">−1</button>
-    <button id="bPlus">+1</button><button id="bAll">All</button>
+    <button id="bNone">None</button>
+    <span class="rng">Show <input id="rFrom" type="number" min="1"> – <input id="rTo" type="number" min="1"></span>
+    <button id="bAll">All</button>
     <span class="sp" id="nShown"></span>
    </div>
    <div id="trips"></div>
-   <div class="overline insp-sec">Flags <span class="aux" id="fcount"></span></div>
+   <div class="overline insp-sec">
+    <span>Flags <span class="aux" id="fcount"></span></span>
+    <span class="rewind"><button id="bUndo">Undo</button><button id="bRedo">Redo</button></span>
+   </div>
    <div id="flags"></div>
+   <div class="overline insp-sec" id="resolvedHead" style="display:none">
+    <span>Resolved <span class="aux" id="rcount"></span></span>
+    <span class="rewind"><button id="bResolvedToggle">Show</button></span>
+   </div>
+   <div id="resolved" style="display:none"></div>
   </aside>
  </div>
 </div>
@@ -153,6 +173,9 @@ const FC={fragment:'#c2479e',mode_change:'#8e44ad',missing_trip:'#2c6fb3',missin
 const FNAME={fragment:'Fragment',mode_change:'Mode change',missing_trip:'Missing trip',missing_activity:'Missing activity',zero_move:'Zero-move'};
 const FDESC={fragment:'The app split one drive into pieces.',mode_change:'Different speed classes — kept separate.',
  missing_trip:'A real trip looks absent in the gap.',missing_activity:'A longer gap — an unlogged stop.',zero_move:'Logged trip that barely moved.'};
+const APPLY_VERB={fragment:'Accept',missing_trip:'Accept',zero_move:'Accept',missing_activity:'Reviewed',mode_change:'Merge'};
+const APPLY_DONE={fragment:'Accepted',missing_trip:'Accepted',zero_move:'Accepted',missing_activity:'Reviewed',mode_change:'Merged'};
+const APPLY_RES={fragment:'accept',missing_trip:'accept',zero_move:'accept',missing_activity:'reviewed',mode_change:'merge'};
 const TC=["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#00bcd4","#a65628","#f781bf","#666633","#0d6b58","#b8860b","#7b68ee"];
 const STRAIGHT_COL="#3d4759";   // straight start→end view: all trips one neutral colour
 const WD=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -166,8 +189,9 @@ const personSel=document.getElementById('person'),daySel=document.getElementById
 const lyTrips=document.getElementById('lyTrips'),lyStraight=document.getElementById('lyStraight'),
       lyFlags=document.getElementById('lyFlags'),lyEnds=document.getElementById('lyEnds');
 const tripsEl=document.getElementById('trips'),flagsEl=document.getElementById('flags'),legendEl=document.getElementById('legend');
+const rFrom=document.getElementById('rFrom'),rTo=document.getElementById('rTo');
 
-let byPerson={},cur={person:null,key:null,data:null},hidden=new Set(),firstN=0,sel=null;
+let byPerson={},cur={person:null,key:null,data:null},hidden=new Set(),sel=null,resolvedOpen=false;
 
 fetch(`/api/${SID}/days`).then(r=>r.json()).then(d=>{
  const c=d.counts;
@@ -187,18 +211,27 @@ function fillDays(){
    daySel.add(new Option(`${x.date} · ${weekday(x.date)}`+(x.n_flags?`  ⚠${x.n_flags}`:''),x.key)));
  cur.key=daySel.value;loadDay();
 }
-function loadDay(){
- hidden=new Set();sel=null;
+// keep=true preserves the current show/hide + selection across a decision
+// (a fresh day load resets them). fit=true re-frames the map (day/person switch).
+function loadDay(fit=true,keep=false){
+ if(!keep){hidden=new Set();sel=null;resolvedOpen=false;}
  fetch(`/api/${SID}/live-day?key=`+encodeURIComponent(cur.key)).then(r=>r.json()).then(d=>{
-  cur.data=d;firstN=d.trips.length;
+  cur.data=d;
+  if(keep){const T=d.trips.length;hidden=new Set([...hidden].filter(s=>s<=T));if(sel!=null&&sel>T)sel=null;}
+  else{rFrom.value=1;rTo.value=d.trips.length;}
   document.getElementById('crumb').innerHTML=`<span class="mono">${cur.person}</span><span class="sep">/</span>`+
     `<span class="mono">${cur.key.split('|')[1]}</span><span class="sep">·</span>${d.trips.length} trips`;
-  render();
+  render(fit);   // fit only on a fresh day load, never after an action
  });
 }
 function tcol(seq){return TC[(seq-1)%TC.length];}
-function setFirst(n){const T=cur.data.trips.length;firstN=Math.max(0,Math.min(T,n));
- hidden=new Set();cur.data.trips.forEach(t=>{if(t.seq>firstN)hidden.add(t.seq);});render();}
+function setRange(a,b){
+ const T=cur.data.trips.length;
+ a=Math.max(1,Math.min(T,a||1)); b=Math.max(a,Math.min(T,b||T));
+ hidden=new Set();cur.data.trips.forEach(t=>{if(t.seq<a||t.seq>b)hidden.add(t.seq);});
+ rFrom.value=a;rTo.value=b;render();
+}
+function showNone(){hidden=new Set(cur.data.trips.map(t=>t.seq));rFrom.value='';rTo.value='';render();}
 
 function evLine(e){
  if(e.median_speed_kmh!=null)return `${e.displacement_m!=null?e.displacement_m+' m':''}${e.median_speed_kmh!=null?' · '+e.median_speed_kmh+' km/h':''}`;
@@ -218,7 +251,14 @@ function addArrows(pl,color){
  }]}).addTo(layer);
 }
 
-function render(){
+// full render: redraw the map AND rebuild the inspector panels
+function render(fit){
+ if(!cur.data)return;
+ drawMap(fit);
+ renderTrips();renderFlags();renderLegend();
+}
+// map only — used on pan/zoom so the inspector panels are left untouched
+function drawMap(fit){
  const d=cur.data;if(!d)return;
  layer.clearLayers();
  const byseq={};d.trips.forEach(t=>byseq[t.seq]=t);
@@ -238,24 +278,27 @@ function render(){
    L.circleMarker(t.e,{radius:5,color:col,weight:2,fillColor:'#fff',fillOpacity:1}).addTo(layer);
   }
  });
+ if(fit&&pts.length)map.fitBounds(pts,{padding:[50,50]});
  if(lyFlags.checked){
+  const bnds=map.getBounds();   // only flags whose trips are in the current viewport
   d.flags.forEach(f=>{
+   if(f.status!=='pending')return;   // decided flags (accepted/reviewed/waived) leave the map
    const col=FC[f.type]||'#000',sq=f.seqs.filter(x=>x!=null);let mid;
    if(f.type==='zero_move'){
-    const t=byseq[sq[0]];if(!t||hidden.has(t.seq))return;
+    const t=byseq[sq[0]];if(!t||hidden.has(t.seq)||!bnds.contains(t.s))return;
     L.circleMarker(t.s,{radius:12,color:col,weight:3,dashArray:'4',fill:false}).addTo(layer);mid=t.s;
    }else{
     const a=byseq[sq[0]],b=byseq[sq[1]];
     if(!a||!b||hidden.has(a.seq)||hidden.has(b.seq))return;
+    if(!bnds.contains(a.e)&&!bnds.contains(b.s))return;
     L.polyline([a.e,b.s],{color:col,weight:3,dashArray:'8,6'}).addTo(layer);
     mid=[(a.e[0]+b.s[0])/2,(a.e[1]+b.s[1])/2];
    }
    L.marker(mid,{interactive:false,icon:L.divIcon({className:'',iconSize:null,html:`<div class="flabel" style="background:${col}">${FNAME[f.type]}</div>`})}).addTo(layer);
   });
  }
- if(pts.length)map.fitBounds(pts,{padding:[50,50]});
- renderTrips();renderFlags();renderLegend();
 }
+map.on('moveend',()=>{if(cur.data)drawMap(false);});
 
 function renderTrips(){
  const d=cur.data;tripsEl.innerHTML='';
@@ -286,19 +329,49 @@ function detailHTML(t){
  return `<div class="detail">`+rows.map(([k,v])=>`<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')+`</div>`;
 }
 
-function renderFlags(){
- const d=cur.data;flagsEl.innerHTML='';
- document.getElementById('fcount').textContent=d.flags.length;
- if(!d.flags.length){flagsEl.innerHTML='<div class="empty">No flags on this day.</div>';return;}
- d.flags.forEach(f=>{
-  const sq=f.seqs.filter(x=>x!=null).map(s=>'#'+s).join(', ');
-  const card=document.createElement('div');card.className='flagrow';
-  card.innerHTML=`<div class="flagrow__top"><span class="pill" style="background:${FC[f.type]}">${FNAME[f.type]}</span>`+
-   `<span class="mono" style="font-size:11px;color:var(--slate-500)">${sq}</span>`+
-   `<span class="status ${f.status}">${f.status}</span></div><div class="ev">${evLine(f.ev||{})}</div>`;
-  flagsEl.appendChild(card);
- });
+function flagCard(f){
+ const sq=f.seqs.filter(x=>x!=null).map(s=>'#'+s).join(', ');
+ const applyRes=APPLY_RES[f.type]||'accept';
+ const acc=f.status==='accepted', wv=f.status==='waived';
+ const card=document.createElement('div');card.className='flagrow';
+ card.innerHTML=`<div class="flagrow__top"><span class="pill" style="background:${FC[f.type]}">${FNAME[f.type]}</span>`+
+  `<span class="mono" style="font-size:11px;color:var(--slate-500)">${sq}</span>`+
+  `<span class="status ${f.status}">${f.status}</span></div><div class="ev">${evLine(f.ev||{})}</div>`+
+  `<div class="flag-actions">`+
+    `<button class="act apply${acc?' on':''}" title="${acc?'Click to undo':''}">${acc?APPLY_DONE[f.type]:APPLY_VERB[f.type]}</button>`+
+    `<button class="act waive${wv?' on waive':''}" title="${wv?'Click to undo':''}">${wv?'Waived':'Waive'}</button></div>`;
+ card.querySelector('.apply').onclick=()=>decide(f.id, acc?'clear':applyRes);
+ card.querySelector('.waive').onclick=()=>decide(f.id, wv?'clear':'waive');
+ return card;
 }
+
+function renderFlags(){
+ const d=cur.data;
+ const pend=d.flags.filter(f=>f.status==='pending');
+ const res=d.flags.filter(f=>f.status!=='pending');
+ document.getElementById('fcount').textContent=pend.length;
+ flagsEl.innerHTML='';
+ if(!pend.length) flagsEl.innerHTML='<div class="empty">No pending flags.</div>';
+ else pend.forEach(f=>flagsEl.appendChild(flagCard(f)));
+
+ const head=document.getElementById('resolvedHead'), rEl=document.getElementById('resolved');
+ if(res.length){
+  head.style.display='';
+  document.getElementById('rcount').textContent=res.length;
+  document.getElementById('bResolvedToggle').textContent=resolvedOpen?'Hide':'Show';
+  rEl.style.display=resolvedOpen?'':'none';
+  rEl.innerHTML='';
+  if(resolvedOpen) res.forEach(f=>rEl.appendChild(flagCard(f)));
+ }else{
+  head.style.display='none'; rEl.style.display='none'; rEl.innerHTML='';
+ }
+}
+
+function decide(flagId,resolution){
+ fetch(`/api/${SID}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({flag_id:flagId,resolution})}).then(()=>loadDay(false,true));
+}
+function rewind(path){fetch(`/api/${SID}/${path}`,{method:'POST'}).then(()=>loadDay(false,true));}
 
 function renderLegend(){
  const types=[...new Set(cur.data.flags.map(f=>f.type))];
@@ -310,9 +383,12 @@ function renderLegend(){
 personSel.onchange=()=>{cur.person=personSel.value;fillDays();};
 daySel.onchange=()=>{cur.key=daySel.value;loadDay();};
 [lyTrips,lyStraight,lyFlags,lyEnds].forEach(c=>c.onchange=render);
-document.getElementById('bNone').onclick=()=>setFirst(0);
-document.getElementById('bMinus').onclick=()=>setFirst(firstN-1);
-document.getElementById('bPlus').onclick=()=>setFirst(firstN+1);
-document.getElementById('bAll').onclick=()=>setFirst(cur.data.trips.length);
+document.getElementById('bUndo').onclick=()=>rewind('undo');
+document.getElementById('bRedo').onclick=()=>rewind('redo');
+document.getElementById('bResolvedToggle').onclick=()=>{resolvedOpen=!resolvedOpen;renderFlags();};
+document.getElementById('bNone').onclick=()=>showNone();
+document.getElementById('bAll').onclick=()=>setRange(1,cur.data.trips.length);
+rFrom.onchange=()=>setRange(parseInt(rFrom.value),parseInt(rTo.value));
+rTo.onchange=()=>setRange(parseInt(rFrom.value),parseInt(rTo.value));
 </script>
 </body></html>

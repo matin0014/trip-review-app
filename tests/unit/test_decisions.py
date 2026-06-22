@@ -56,3 +56,13 @@ def test_revert_on_empty_is_noop():
 
 def test_redo_without_revert_is_noop():
     assert replay([dec("a", "accept"), REDO]) == {"a"}
+
+
+def test_clear_undecides_a_flag():
+    assert replay([dec("a", "accept"), dec("a", "clear")]) == set()
+    assert replay([dec("a", "waive"), dec("a", "clear")]) == set()
+
+
+def test_revert_a_clear_restores_the_decision():
+    # accept -> clear -> revert(the clear) should bring the accept back
+    assert replay([dec("a", "accept"), dec("a", "clear"), REVERT]) == {"a"}

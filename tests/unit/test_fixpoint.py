@@ -109,6 +109,49 @@ def test_cascade_born_flag_surfaces_after_removal():
     assert cascade.flag_id not in {f.flag_id for f in baseline}  # genuinely new
 
 
+# A fragment whose second piece is also a zero_move (the aixz-awv-wa 2024-11-12
+# trap): leg 1 moves 300 m, leg 2 is a short 50 m hop -> fragment(1,2) + zero_move(2).
+def conflict_day():
+    return [leg(1, 5, 0, 10, 0.0, 300.0), leg(2, 5, 12, 17, 1000.0, 1050.0)]
+
+
+def test_accept_fragment_and_zero_move_merge_wins():
+    trips = conflict_day()
+    flags = surfaced_flags(trips)
+    frag, zm = of_type(flags, "fragment"), of_type(flags, "zero_move")
+    # accept BOTH -> the merge rescues the piece instead of deleting it
+    live, _ = fixpoint(trips, {frag.flag_id, zm.flag_id})
+    assert len(live) == 1
+    assert live[0].start_ts == trips[0].start_ts and live[0].end_ts == trips[1].end_ts
+
+
+def test_accepted_fragment_drops_its_pieces_zero_move():
+    # accepting the fragment swallows piece 2 -> its zero_move must NOT linger
+    trips = conflict_day()
+    base = surfaced_flags(trips)
+    assert any(f.flag_type == "zero_move" for f in base)   # it exists at baseline
+    frag = of_type(base, "fragment")
+    _, surfaced = fixpoint(trips, {frag.flag_id})
+    types = {f.flag_type for f in surfaced}
+    assert "fragment" in types and "zero_move" not in types  # frag kept, zero_move gone
+
+
+def test_accept_fragment_alone_also_merges():
+    trips = conflict_day()
+    frag = of_type(surfaced_flags(trips), "fragment")
+    live, _ = fixpoint(trips, {frag.flag_id})
+    assert len(live) == 1 and live[0].end_ts == trips[1].end_ts
+
+
+def test_zero_move_alone_still_removes_piece():
+    # fragment NOT accepted -> the piece is genuinely removed (explicit choice)
+    trips = conflict_day()
+    zm = of_type(surfaced_flags(trips), "zero_move")
+    live, _ = fixpoint(trips, {zm.flag_id})
+    assert len(live) == 1 and live[0].raw_row == 1
+    assert live[0].end_ts == trips[0].end_ts   # leg 2 gone, leg 1 left standalone
+
+
 def test_contiguous_day_is_a_noop():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]  # gap < gate
     live, surfaced = fixpoint(trips, accepted_ids=set())

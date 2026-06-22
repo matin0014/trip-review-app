@@ -30,7 +30,9 @@ _MAX_ROUNDS = 50
 # mode_change is "merge"; all of those apply. "waive" leaves the trip untouched.
 APPLY_RESOLUTIONS = frozenset({"accept", "merge", "reviewed"})
 WAIVE_RESOLUTIONS = frozenset({"waive"})
-VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS
+# "clear" un-decides a flag (toggle an accept/waive back to pending). It is a real
+# logged event so it participates in undo/redo like any other decision.
+VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS | frozenset({"clear"})
 
 
 def resolutions(events: list) -> dict:
@@ -58,7 +60,10 @@ def resolutions(events: list) -> dict:
 
     effective: dict = {}
     for e in active:
-        effective[e["flag_id"]] = e["resolution"]  # last active decision wins
+        if e["resolution"] == "clear":
+            effective.pop(e["flag_id"], None)   # back to pending
+        else:
+            effective[e["flag_id"]] = e["resolution"]  # last active decision wins
     return effective
 
 
@@ -73,25 +78,34 @@ def fixpoint(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
     the trip set stops changing.
 
     Returns ``(live_trips, surfaced_flags)``: the converged projected trips, and
-    every flag surfaced across the rounds (baseline + cascade-born), each with a
-    stable content id. Applying an accepted change (merge/remove/stub) shifts the
-    geometry, so the next round's `classify_day` can birth NEW flags on the
-    freshly-adjacent neighbours — those are surfaced as PENDING (they are only
-    applied if their id is itself in `accepted_ids`). The cascade never crosses
-    the person-day boundary because the whole loop runs on one day's trips.
+    the flags worth showing. Applying an accepted change (merge/remove/stub)
+    shifts the geometry, so the next round's `classify_day` can birth NEW flags on
+    the freshly-adjacent neighbours (surfaced PENDING). The surfaced set is the
+    classification of the FINAL trips (the currently-relevant flags, cascade-born
+    included) PLUS any ACCEPTED flag its own application consumed — so a reviewer
+    still sees and can undo a merge/removal. A pending or waived flag whose subject
+    trip no longer exists live (e.g. a zero_move on a piece an accepted fragment
+    swallowed) is dropped entirely. The cascade never crosses the person-day
+    boundary because the whole loop runs on one day's trips.
     """
     trips = list(day_trips)
     surfaced: dict = {}
+    flags: list = []
     for _ in range(_MAX_ROUNDS):
         flags = with_ids(classify_day(trips, params))
         for f in flags:
             surfaced.setdefault(f.flag_id, f)  # first sighting wins (stable id)
         accepted_here = [f for f in flags if f.flag_id in accepted_ids]
-        projected = project(trips, accepted_here, merge_types=FIXPOINT_MERGE_TYPES)
+        projected = project(trips, accepted_here, merge_types=FIXPOINT_MERGE_TYPES,
+                            merge_wins=True)
         if _signature(projected) == _signature(trips):
             break  # no accepted change left to apply -> fixpoint reached
         trips = projected
-    return trips, list(surfaced.values())
+
+    final_ids = {f.flag_id for f in flags}  # flags still live on the converged trips
+    consumed = [f for f in surfaced.values()
+                if f.flag_id in accepted_ids and f.flag_id not in final_ids]
+    return trips, flags + consumed
 
 
 def _signature(trips: list) -> tuple:
