@@ -21,10 +21,11 @@ means a zero_move on a merged piece does NOT remove it. Pure given
 from __future__ import annotations
 
 import os
+import zipfile
 from collections import defaultdict
 
 from app import session
-from app.decisions import fixpoint, replay
+from app.decisions import fixpoint, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
@@ -41,6 +42,7 @@ def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
     number assigned by the caller, ref None) or ``"review"`` (accepted=reviewed
     missing_activity gap -> ``Q<ref>``, ref = the trip before the gap). A WAIVED
     missing_activity is never in `accepted_ids`, so it produces no row.
+    `surfaced` = the day's flags (for the Do-file's per-row flag column).
     """
     live, surfaced = fixpoint(day_trips, accepted_ids, params)
     applied = [f for f in surfaced if f.flag_id in accepted_ids]
@@ -90,7 +92,7 @@ def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
-    return rows, extras
+    return rows, extras, surfaced
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -120,26 +122,46 @@ def _stub_row(stub) -> dict:
     }
 
 
-def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
-    """Read the raw workbook and return it with a `trip_id` column added, removed
-    rows dropped, and accepted missing-trip stubs appended as ``A`` rows. raw
-    columns are preserved verbatim; trip_id labels each row (keep / M-merge / A-add).
-    Skipped/unparsed raw rows stay as plain keeps.
-    """
-    import pandas as pd  # lazy: keeps the pure clean_day import light
+def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None) -> tuple:
+    """Project the whole dataset once: ``(tid, removed, extras, flag_by_row)``.
 
-    df = pd.read_excel(raw_path).reset_index(drop=True)
-    trips = load_trips(raw_path)
+    `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge);
+    `removed` = raw rows dropped by an accepted zero_move; `extras` = the
+    add/review synthesized rows. When `res_map` (flag_id -> resolution) is given,
+    `flag_by_row` maps raw_row -> ["<type>:<resolution>", ...] for the Do-file;
+    otherwise it is empty. Shared by the cleaned xlsx and the Do-file so they
+    never disagree.
+    """
     tid: dict = {}
     removed: set = set()
     extras: list = []
-    for day_trips in group_person_days(trips).values():
-        rows, day_extras = clean_day(day_trips, accepted_ids, params)
+    flag_by_row: dict = defaultdict(list)
+    for day_trips in group_person_days(load_trips(raw_path)).values():
+        rows, day_extras, surfaced = clean_day(day_trips, accepted_ids, params)
         present = {r for r, _ in rows}
         for r, t in rows:
             tid[r] = t
         removed |= {x.raw_row for x in day_trips} - present
         extras += day_extras
+        if res_map is not None:
+            for f in surfaced:
+                tag = f"{f.flag_type}:{res_map.get(f.flag_id, 'pending')}"
+                touched = [f.trip] if f.trip is not None else list(f.left) + list(f.right)
+                for r in touched:
+                    flag_by_row[r].append(tag)
+    return tid, removed, extras, flag_by_row
+
+
+def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
+    """Read the raw workbook and return it with a `trip_id` column added, removed
+    rows dropped, and accepted missing-trip/reviewed-activity rows appended as
+    ``A``/``Q`` rows. raw columns are preserved verbatim. Skipped/unparsed raw
+    rows stay as plain keeps.
+    """
+    import pandas as pd  # lazy: keeps the pure clean_day import light
+
+    df = pd.read_excel(raw_path).reset_index(drop=True)
+    tid, removed, extras, _ = project_dataset(raw_path, accepted_ids, params)
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
@@ -149,26 +171,96 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
     if extras:  # append synthesized rows: A = missing-trip stubs, Q = reviewed gaps
         cols = list(cleaned.columns)
         added = []
-        add_n = 0
-        for kind, ref, trip in extras:
+        for trip_id, _kind, trip in _extra_ids(extras):
             row = {c: None for c in cols}
             row.update(_stub_row(trip))
-            if kind == "add":
-                add_n += 1
-                row["trip_id"] = project_trip_id("add", add_counter=add_n)
-            else:  # review -> Q<trip before the gap>
-                row["trip_id"] = project_trip_id("review", raw_row=ref)
+            row["trip_id"] = trip_id
             added.append(row)
         cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
     return cleaned
 
 
-def generate_cleaned(sid: str, params=DEFAULT) -> str:
-    """Build and atomically write ``sessions/<sid>/cleaned.xlsx``; return its path."""
-    raw_name = session.read_proposals(sid)["raw_name"]
-    raw_path = os.path.join(session.session_dir(sid), raw_name)
-    df = build_cleaned_df(raw_path, replay(session.read_events(sid)), params)
+def _extra_ids(extras: list) -> list:
+    """Assign trip_ids to synthesized rows: ``A<n>`` for adds (sequential),
+    ``Q<ref>`` for reviewed gaps. Shared so cleaned.xlsx and the Do-file agree."""
+    out = []
+    add_n = 0
+    for kind, ref, trip in extras:
+        if kind == "add":
+            add_n += 1
+            out.append((project_trip_id("add", add_counter=add_n), kind, trip))
+        else:
+            out.append((project_trip_id("review", raw_row=ref), kind, trip))
+    return out
 
-    out = os.path.abspath(os.path.join(session.session_dir(sid), "cleaned.xlsx"))
-    _write_atomic_xlsx(df, out)
+
+_STATUS = {"M": "merged", "R": "removed", "A": "added", "Q": "reviewed-gap"}
+
+
+def _status_of(trip_id: str) -> str:
+    return _STATUS.get(trip_id[:1], "kept")   # plain "143" keep ids fall through
+
+
+_EXTRA_FLAG = {"add": "missing_trip:accept", "review": "missing_activity:reviewed"}
+
+
+def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFAULT):
+    """The Do-file ledger as a DataFrame: EVERY loaded raw row (removed ones kept
+    and marked ``R<row>``, unlike the cleaned file which drops them) plus the
+    synthesized A/Q rows, with `trip_id` + `status` + `flags` columns added to the
+    raw columns. `flags` lists each flag the row received and its resolution
+    (``"<type>:<resolution>"``). The full audit record; same projection as cleaned.
+    """
+    import pandas as pd
+
+    df = pd.read_excel(raw_path).reset_index(drop=True)
+    tid, removed, extras, flag_by_row = project_dataset(raw_path, accepted_ids, params, res_map)
+
+    def row_id(i):
+        r = i + 1
+        if r in removed:
+            return project_trip_id("remove", raw_row=r)  # R<row> — kept in the Do-file
+        return tid.get(r, str(r))
+
+    n = len(df)
+    df["trip_id"] = [row_id(i) for i in range(n)]
+    df["status"] = [_status_of(t) for t in df["trip_id"]]
+    df["flags"] = ["; ".join(flag_by_row.get(i + 1, [])) for i in range(n)]
+
+    if extras:
+        cols = list(df.columns)
+        added = []
+        for trip_id, kind, trip in _extra_ids(extras):
+            row = {c: None for c in cols}
+            row.update(_stub_row(trip))
+            row["trip_id"] = trip_id
+            row["status"] = "added" if kind == "add" else "reviewed-gap"
+            row["flags"] = _EXTRA_FLAG[kind]
+            added.append(row)
+        df = pd.concat([df, pd.DataFrame(added, columns=cols)], ignore_index=True)
+    return df
+
+
+def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
+    """Atomically write cleaned.xlsx + dofile.xlsx; return (cleaned, dofile) paths."""
+    raw_path = os.path.join(session.session_dir(sid), session.read_proposals(sid)["raw_name"])
+    events = session.read_events(sid)
+    accepted, res_map = replay(events), resolutions(events)
+
+    cleaned = os.path.abspath(os.path.join(session.session_dir(sid), "cleaned.xlsx"))
+    dofile = os.path.abspath(os.path.join(session.session_dir(sid), "dofile.xlsx"))
+    _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params), cleaned)
+    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params), dofile)
+    return cleaned, dofile
+
+
+def generate_bundle(sid: str, params=DEFAULT) -> str:
+    """Write cleaned.xlsx + dofile.xlsx and zip them; return the zip path."""
+    cleaned, dofile = generate_cleaned_and_dofile(sid, params)
+    out = os.path.abspath(os.path.join(session.session_dir(sid), "export.zip"))
+    tmp = out + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(cleaned, "cleaned.xlsx")
+        z.write(dofile, "dofile.xlsx")
+    os.replace(tmp, out)
     return out

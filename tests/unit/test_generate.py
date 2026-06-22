@@ -39,31 +39,31 @@ def conflict_day():
 
 def test_no_decisions_all_keeps():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]  # contiguous, no flags
-    rows, stubs = clean_day(trips, set())
+    rows, stubs, _ = clean_day(trips, set())
     assert rows == [(1, "1"), (2, "2")] and stubs == []
 
 
 def test_accept_fragment_shares_merge_id():
     trips = conflict_day()
-    rows, stubs = clean_day(trips, {fid(trips, "fragment")})
+    rows, stubs, _ = clean_day(trips, {fid(trips, "fragment")})
     assert rows == [(1, "M1"), (2, "M1")] and stubs == []
 
 
 def test_accept_zero_move_drops_the_row():
     trips = conflict_day()
-    rows, _ = clean_day(trips, {fid(trips, "zero_move")})
+    rows, _, _ = clean_day(trips, {fid(trips, "zero_move")})
     assert rows == [(1, "1")]   # row 2 removed -> excluded from cleaned file
 
 
 def test_merge_wins_both_accepted_keeps_both_as_merge():
     trips = conflict_day()
-    rows, _ = clean_day(trips, {fid(trips, "fragment"), fid(trips, "zero_move")})
+    rows, _, _ = clean_day(trips, {fid(trips, "fragment"), fid(trips, "zero_move")})
     assert rows == [(1, "M1"), (2, "M1")]   # zero_move did NOT remove the merged piece
 
 
 def test_accept_missing_trip_yields_an_add_stub():
     trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 20, 25, 1000.0, 1050.0)]  # 10-min gap
-    rows, extras = clean_day(trips, {fid(trips, "missing_trip")})
+    rows, extras, _ = clean_day(trips, {fid(trips, "missing_trip")})
     assert rows == [(1, "1"), (2, "2")]
     assert len(extras) == 1
     kind, ref, stub = extras[0]
@@ -74,7 +74,7 @@ def test_accept_missing_trip_yields_an_add_stub():
 
 def test_reviewed_missing_activity_yields_a_q_gap():
     trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 40, 45, 1000.0, 1050.0)]  # 30-min gap
-    rows, extras = clean_day(trips, {fid(trips, "missing_activity")})
+    rows, extras, _ = clean_day(trips, {fid(trips, "missing_activity")})
     assert rows == [(1, "1"), (2, "2")]                  # reviewed = no geometry change
     assert len(extras) == 1
     kind, ref, gap = extras[0]
@@ -85,5 +85,5 @@ def test_reviewed_missing_activity_yields_a_q_gap():
 def test_waived_flag_is_not_in_accepted_so_no_row():
     # a missing_activity left undecided/waived isn't in accepted_ids -> no extras
     trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 40, 45, 1000.0, 1050.0)]
-    rows, extras = clean_day(trips, set())
+    rows, extras, _ = clean_day(trips, set())
     assert rows == [(1, "1"), (2, "2")] and extras == []

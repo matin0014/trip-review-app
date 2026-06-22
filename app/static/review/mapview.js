@@ -23,7 +23,16 @@ export function drawMap(fit){
   if(S.hidden.has(t.seq)) return;
   const col = lyStraight.checked ? STRAIGHT_COL : tcol(t.seq);
   if(lyTrips.checked){
-   const line = lyStraight.checked ? [t.s,t.e] : t.route;
+   let line;
+   if(lyStraight.checked){
+    line = [t.s, t.e];
+   }else{
+    // close any gap between the GPS route ends and the declared start/end nodes
+    line = t.route.slice();
+    const same = (a,b)=>a && b && a[0]===b[0] && a[1]===b[1];
+    if(line.length && !same(line[0], t.s)) line.unshift(t.s);
+    if(line.length && !same(line[line.length-1], t.e)) line.push(t.e);
+   }
    const pl = L.polyline(line, {color:col, weight:t.seq===S.sel?6:4, opacity:t.seq===S.sel?1:.85}).addTo(layer);
    addArrows(pl, col);
    line.forEach(p=>pts.push(p));

@@ -143,8 +143,8 @@ def create_app() -> Flask:
     def api_generate(sid):
         if not session.exists(sid):
             abort(404)
-        path = generate.generate_cleaned(sid)
-        return send_file(path, as_attachment=True, download_name="cleaned.xlsx")
+        path = generate.generate_bundle(sid)   # cleaned.xlsx + dofile.json, zipped
+        return send_file(path, as_attachment=True, download_name="trip_review_export.zip")
 
     return app
 
