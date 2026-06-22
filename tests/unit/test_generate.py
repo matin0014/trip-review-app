@@ -61,13 +61,29 @@ def test_merge_wins_both_accepted_keeps_both_as_merge():
     assert rows == [(1, "M1"), (2, "M1")]   # zero_move did NOT remove the merged piece
 
 
-def test_accept_missing_trip_yields_a_stub():
+def test_accept_missing_trip_yields_an_add_stub():
     trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 20, 25, 1000.0, 1050.0)]  # 10-min gap
-    rows, stubs = clean_day(trips, {fid(trips, "missing_trip")})
+    rows, extras = clean_day(trips, {fid(trips, "missing_trip")})
     assert rows == [(1, "1"), (2, "2")]
-    assert len(stubs) == 1
-    stub = stubs[0]
-    assert stub.raw_row < 0 and stub.route == [] and stub.mode == "Unknown"
-    # bridges A.end -> B.start
-    assert stub.start_ts == trips[0].end_ts and stub.end_ts == trips[1].start_ts
-    assert stub.start_lat == trips[0].end_lat and stub.end_lon == trips[1].start_lon
+    assert len(extras) == 1
+    kind, ref, stub = extras[0]
+    assert kind == "add" and ref is None
+    assert stub.route == [] and stub.mode == "Unknown"
+    assert stub.start_ts == trips[0].end_ts and stub.end_ts == trips[1].start_ts  # A.end->B.start
+
+
+def test_reviewed_missing_activity_yields_a_q_gap():
+    trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 40, 45, 1000.0, 1050.0)]  # 30-min gap
+    rows, extras = clean_day(trips, {fid(trips, "missing_activity")})
+    assert rows == [(1, "1"), (2, "2")]                  # reviewed = no geometry change
+    assert len(extras) == 1
+    kind, ref, gap = extras[0]
+    assert kind == "review" and ref == 1                 # Q tagged to the trip before the gap
+    assert gap.start_ts == trips[0].end_ts and gap.end_ts == trips[1].start_ts
+
+
+def test_waived_flag_is_not_in_accepted_so_no_row():
+    # a missing_activity left undecided/waived isn't in accepted_ids -> no extras
+    trips = [leg(1, 30, 8, 10, 0.0, 0.0), leg(2, 30, 40, 45, 1000.0, 1050.0)]
+    rows, extras = clean_day(trips, set())
+    assert rows == [(1, "1"), (2, "2")] and extras == []
