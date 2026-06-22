@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import os
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 
-from app import baseline, decisions, session, state
+from app import baseline, decisions, generate, session, state
 from engine.classify import classify_all
 from engine.loader import load_trips
 
@@ -138,6 +138,13 @@ def create_app() -> Flask:
             abort(404)
         session.append_event(sid, {"type": "redo"})
         return _state(sid)
+
+    @app.get("/api/<sid>/generate")
+    def api_generate(sid):
+        if not session.exists(sid):
+            abort(404)
+        path = generate.generate_cleaned(sid)
+        return send_file(path, as_attachment=True, download_name="cleaned.xlsx")
 
     return app
 

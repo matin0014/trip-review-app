@@ -29,5 +29,6 @@ $('bNone').onclick = ()=>showNone();
 $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 rTo.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
+$('bGenerate').onclick = ()=>{window.location.href = `/api/${window.SID}/generate`;};
 
 loadDays();
