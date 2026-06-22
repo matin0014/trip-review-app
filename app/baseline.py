@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from engine.classify import group_person_days
 from engine.ids import with_ids
+from engine.velocity import trip_moving_speed
 
 # Evidence fields worth surfacing (human units already; PairEvidence / TripEvidence).
 _EV_FIELDS = ("gap_distance_m", "gap_time_min", "v_a_kmh", "v_b_kmh",
@@ -43,6 +44,8 @@ def serialize_trip(t, seq: int) -> dict:
         "seq": seq, "id": t.raw_row, "mode": t.mode, "purpose": t.purpose or "",
         "start": t.start_ts.strftime("%H:%M"), "end": t.end_ts.strftime("%H:%M"),
         "dur": round((t.end_ts - t.start_ts).total_seconds() / 60.0, 1),
+        "speed": round(trip_moving_speed(t), 1),   # median moving speed (km/h)
+        "manual": bool((t.purpose or "").strip()),  # user logged a purpose
         "s": [_r(t.start_lat), _r(t.start_lon)],
         "e": [_r(t.end_lat), _r(t.end_lon)],
         "route": route,
