@@ -25,7 +25,7 @@ import zipfile
 from collections import defaultdict
 
 from app import session
-from app.decisions import fixpoint, replay, resolutions
+from app.decisions import fixpoint, manual_ops, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
@@ -33,8 +33,9 @@ from engine.params import DEFAULT
 from engine.proposals import _make_stub
 
 
-def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
-    """Return ``(rows, extras)`` for one person-day.
+def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
+              params=DEFAULT) -> tuple:
+    """Return ``(rows, extras, surfaced)`` for one person-day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
     excluded. `extras` = synthesized rows the caller appends, as
@@ -43,8 +44,9 @@ def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
     missing_activity gap -> ``Q<ref>``, ref = the trip before the gap). A WAIVED
     missing_activity is never in `accepted_ids`, so it produces no row.
     `surfaced` = the day's flags (for the Do-file's per-row flag column).
+    ``day_ops`` = currently-active manual edits for this day (from `manual_ops`).
     """
-    live, surfaced = fixpoint(day_trips, accepted_ids, params)
+    live, surfaced = fixpoint(day_trips, accepted_ids, ops=day_ops or [], params=params)
     applied = [f for f in surfaced if f.flag_id in accepted_ids]
 
     parent: dict = {}
@@ -70,8 +72,20 @@ def clean_day(day_trips: list, accepted_ids: set, params=DEFAULT) -> tuple:
         groups[find(r)].append(r)
     merged_root = {m: root for root, members in groups.items() if len(members) > 1 for m in members}
 
+    # Manual merges: add their members to merged_root so they get M-prefix trip_ids.
+    for op in (day_ops or []):
+        if op.get("type") == "manual_merge":
+            root = min(op["raw_rows"])
+            for r in op["raw_rows"]:
+                merged_root[r] = root
+
     # merge_wins: a zero_move on a merged piece is NOT a removal.
     removed = {f.trip for f in applied if f.flag_type == "zero_move"} - set(merged_root)
+
+    # Manual deletes: exclude from the cleaned file (appear as R<row> in Do-file).
+    for op in (day_ops or []):
+        if op.get("type") == "manual_delete":
+            removed.add(op["raw_row"])
 
     rows: list = []
     for t in sorted(day_trips, key=lambda x: x.start_ts):
@@ -122,22 +136,27 @@ def _stub_row(stub) -> dict:
     }
 
 
-def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None) -> tuple:
+def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
+                    all_ops: list = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row)``.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge);
-    `removed` = raw rows dropped by an accepted zero_move; `extras` = the
-    add/review synthesized rows. When `res_map` (flag_id -> resolution) is given,
-    `flag_by_row` maps raw_row -> ["<type>:<resolution>", ...] for the Do-file;
-    otherwise it is empty. Shared by the cleaned xlsx and the Do-file so they
-    never disagree.
+    `removed` = raw rows dropped by an accepted zero_move or manual delete;
+    `extras` = the add/review synthesized rows. When `res_map` (flag_id ->
+    resolution) is given, `flag_by_row` maps raw_row -> ["<type>:<resolution>",
+    ...] for the Do-file; otherwise it is empty. Shared by the cleaned xlsx and
+    the Do-file so they never disagree. ``all_ops`` is the full ordered list of
+    active manual ops from `decisions.manual_ops`; filtered per day here.
     """
     tid: dict = {}
     removed: set = set()
     extras: list = []
     flag_by_row: dict = defaultdict(list)
-    for day_trips in group_person_days(load_trips(raw_path)).values():
-        rows, day_extras, surfaced = clean_day(day_trips, accepted_ids, params)
+    for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
+        day_key = f"{person}|{date}"
+        day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
+        rows, day_extras, surfaced = clean_day(day_trips, accepted_ids, day_ops=day_ops,
+                                               params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
             tid[r] = t
@@ -152,7 +171,8 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     return tid, removed, extras, flag_by_row
 
 
-def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
+def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
+                     all_ops: list = None):
     """Read the raw workbook and return it with a `trip_id` column added, removed
     rows dropped, and accepted missing-trip/reviewed-activity rows appended as
     ``A``/``Q`` rows. raw columns are preserved verbatim. Skipped/unparsed raw
@@ -161,7 +181,8 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT):
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, _ = project_dataset(raw_path, accepted_ids, params)
+    tid, removed, extras, _ = project_dataset(raw_path, accepted_ids, params,
+                                              all_ops=all_ops)
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
@@ -204,7 +225,8 @@ def _status_of(trip_id: str) -> str:
 _EXTRA_FLAG = {"add": "missing_trip:accept", "review": "missing_activity:reviewed"}
 
 
-def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFAULT):
+def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFAULT,
+                    all_ops: list = None):
     """The Do-file ledger as a DataFrame: EVERY loaded raw row (removed ones kept
     and marked ``R<row>``, unlike the cleaned file which drops them) plus the
     synthesized A/Q rows, with `trip_id` + `status` + `flags` columns added to the
@@ -214,7 +236,8 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, flag_by_row = project_dataset(raw_path, accepted_ids, params, res_map)
+    tid, removed, extras, flag_by_row = project_dataset(raw_path, accepted_ids, params,
+                                                         res_map, all_ops=all_ops)
 
     def row_id(i):
         r = i + 1
@@ -246,11 +269,12 @@ def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     raw_path = os.path.join(session.session_dir(sid), session.read_proposals(sid)["raw_name"])
     events = session.read_events(sid)
     accepted, res_map = replay(events), resolutions(events)
+    ops = manual_ops(events)
 
     cleaned = os.path.abspath(os.path.join(session.session_dir(sid), "cleaned.xlsx"))
     dofile = os.path.abspath(os.path.join(session.session_dir(sid), "dofile.xlsx"))
-    _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params), cleaned)
-    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params), dofile)
+    _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params, all_ops=ops), cleaned)
+    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops), dofile)
     return cleaned, dofile
 
 

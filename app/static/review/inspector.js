@@ -16,25 +16,61 @@ function detailHTML(t){
  return `<div class="detail">`+rows.map(([k,v])=>`<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')+`</div>`;
 }
 
+function _mergeSelValid() {
+ if(S.mergeSelected.size < 2) return false;
+ const seqs = S.cur.data.trips
+  .filter(t=>S.mergeSelected.has(t.id))
+  .map(t=>t.seq)
+  .sort((a,b)=>a-b);
+ if(seqs.length !== S.mergeSelected.size) return false;
+ for(let i=1; i<seqs.length; i++) if(seqs[i]!==seqs[i-1]+1) return false;
+ return true;
+}
+
+function _updateMergeBar() {
+ const bar = $('mergeBar');
+ if(!S.mergeMode){ bar.style.display='none'; return; }
+ bar.style.display='';
+ const n = S.mergeSelected.size;
+ const valid = _mergeSelValid();
+ $('mergeHint').textContent = n===0 ? 'Click trips to select'
+  : `${n} trip${n>1?'s':''} selected${valid?'':' — must be consecutive'}`;
+ const btn = $('bMergeCommit');
+ btn.textContent = `Merge ${n} trip${n>1?'s':''}`;
+ btn.disabled = !valid;
+}
+
 export function renderTrips(){
  const d = S.cur.data; tripsEl.innerHTML='';
  $('tcount').textContent = d.trips.length;
  $('nShown').textContent = (d.trips.length-S.hidden.size)+' / '+d.trips.length+' shown';
  d.trips.forEach(t=>{
   const card = document.createElement('div');
-  card.className = 'row'+(t.seq===S.sel?' sel':'')+(S.hidden.has(t.seq)?' hidden':'');
+  const mergeSel = S.mergeMode && S.mergeSelected.has(t.id);
+  card.className = 'row'+(t.seq===S.sel&&!S.mergeMode?' sel':'')
+   +(S.hidden.has(t.seq)?' hidden':'')
+   +(mergeSel?' merge-sel':'');
   const logged = t.manual?`<span class="logged">logged</span>`:'';
   card.innerHTML = `<div class="row__head">`+
    `<span class="node" style="background:${tcol(t.seq)}">${t.seq}</span>`+
    `<div class="row__main"><div class="row__time"><span class="mono">${t.start}–${t.end}</span>${logged}`+
    `<span class="mono" style="color:var(--slate-500)">${t.dur}m</span></div>`+
    `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}</div></div>`+
-   `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span></div>`+
-   (t.seq===S.sel?detailHTML(t):'');
-  card.querySelector('.vis').onclick = e=>{e.stopPropagation(); S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render();};
-  card.onclick = ()=>{S.sel=(S.sel===t.seq?null:t.seq); S.render();};
+   (S.mergeMode ? '' : `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span>`)+
+   `</div>`+
+   (t.seq===S.sel&&!S.mergeMode?detailHTML(t):'');
+  if(S.mergeMode){
+   card.onclick = ()=>{
+    S.mergeSelected.has(t.id)?S.mergeSelected.delete(t.id):S.mergeSelected.add(t.id);
+    S.render(false);
+   };
+  } else {
+   card.querySelector('.vis').onclick = e=>{e.stopPropagation(); S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render();};
+   card.onclick = ()=>{S.sel=(S.sel===t.seq?null:t.seq); S.render();};
+  }
   tripsEl.appendChild(card);
  });
+ _updateMergeBar();
 }
 
 export function flagCard(f){

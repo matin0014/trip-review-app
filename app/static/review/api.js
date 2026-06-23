@@ -47,3 +47,12 @@ export function decide(flagId, resolution){
    body:JSON.stringify({flag_id:flagId, resolution})}).then(()=>loadDay(false,true));
 }
 export function rewind(path){fetch(`/api/${SID}/${path}`, {method:'POST'}).then(()=>loadDay(false,true));}
+
+export function manualDelete(rawRow, dayKey){
+ fetch(`/api/${SID}/manual_delete`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+export function manualMerge(rawRows, dayKey){
+ fetch(`/api/${SID}/manual_merge`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_rows:rawRows, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
