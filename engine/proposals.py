@@ -20,12 +20,35 @@ from engine.ids import with_ids
 from engine.models import Trip
 
 
-def apply_all(trips: list, flags: list) -> list:
-    """Project the cleaned trip set with every proposal applied once (no cascade)."""
+def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
+            merge_wins: bool = False) -> list:
+    """One apply pass (no cascade): remove zero_move trips -> merge the pairs in
+    `merge_types` (transitive union, removed trips excluded) -> insert
+    missing_trip stubs. Returns the projected trips sorted by (person, start_ts).
+
+    `flags` is the set to APPLY (every flag for `apply_all`; accepted-only for the
+    live fixpoint). `merge_types` lets the caller choose what counts as a merge —
+    `apply_all` merges fragments only, while the fixpoint also merges an accepted
+    `mode_change` (its resolution is Merge). missing_activity / reviewed change no
+    geometry. Stub raw_rows go one below the lowest existing row, so re-projecting
+    an already-stubbed trip set never collides (the linchpin for the fixpoint loop).
+
+    `merge_wins` flips the zero_move-vs-merge precedence. By default zero_move
+    removal wins (Stage-2 boundary preservation: junk never drags a neighbour into
+    a merge). In the LIVE review path it is True: a trip that is a member of an
+    accepted merge is NOT removed by its own zero_move — the human's "these pieces
+    are one drive" dominates, the merge reconstitutes it, and the fixpoint then
+    re-classifies the merged trip (re-flagging zero_move only if it STILL barely
+    moved). This makes a fragment+zero_move pair resolve correctly in any order.
+    """
     by_row = {t.raw_row: t for t in trips}
     removed = {f.trip for f in flags if f.flag_type == "zero_move"}
+    if merge_wins:
+        merge_members = {row for f in flags if f.flag_type in merge_types
+                         for row in (f.left[0], f.right[0])}
+        removed -= merge_members  # an accepted merge rescues its pieces from removal
 
-    roots = _merge_roots(flags, removed)
+    roots = _merge_roots(flags, removed, merge_types)
     groups: dict = defaultdict(list)
     for t in trips:
         if t.raw_row in removed:
@@ -36,17 +59,26 @@ def apply_all(trips: list, flags: list) -> list:
     for group in groups.values():
         out.append(group[0] if len(group) == 1 else _merge_group(group))
 
-    stub_n = 0
+    next_stub = min([0] + [t.raw_row for t in trips]) - 1
     for f in flags:
         if f.flag_type == "missing_trip":
             a, b = by_row.get(f.left[0]), by_row.get(f.right[0])
             if a is None or b is None or f.left[0] in removed or f.right[0] in removed:
                 continue
-            stub_n += 1
-            out.append(_make_stub(a, b, -stub_n))
+            out.append(_make_stub(a, b, next_stub))
+            next_stub -= 1
 
     out.sort(key=lambda t: (str(t.person), t.start_ts))
     return out
+
+
+def apply_all(trips: list, flags: list) -> list:
+    """Project the cleaned trip set with every proposal applied once (no cascade).
+
+    The "all auto-accepted" view used by Stage 2 / the distribution charts — a thin
+    wrapper over `project` (fragment merges only, matching the locked Stage 2e
+    behaviour)."""
+    return project(trips, flags)
 
 
 def build_dofile(trips: list, flags: list) -> dict:
@@ -91,9 +123,9 @@ def build_dofile(trips: list, flags: list) -> dict:
     return {"flags": flags_coll, "rows": rows}
 
 
-def _merge_roots(flags: list, removed: set) -> dict:
-    """Union-find over accepted fragment pairs (skipping removed trips); maps each
-    member raw_row to its group root (the lowest raw row in the group)."""
+def _merge_roots(flags: list, removed: set, merge_types: tuple = ("fragment",)) -> dict:
+    """Union-find over merge-type pairs (skipping removed trips); maps each member
+    raw_row to its group root (the lowest raw row in the group)."""
     parent: dict = {}
 
     def find(x: int) -> int:
@@ -109,7 +141,7 @@ def _merge_roots(flags: list, removed: set) -> dict:
             parent[max(ra, rb)] = min(ra, rb)  # root = lowest raw row
 
     for f in flags:
-        if f.flag_type == "fragment":
+        if f.flag_type in merge_types:
             a, b = f.left[0], f.right[0]
             if a in removed or b in removed:
                 continue

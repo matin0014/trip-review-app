@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Trip Review</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='review/review.css') }}">
+</head><body>
+<div class="app">
+ <header class="topbar">
+  <div class="brand"><span class="dot"></span>Trip Review</div>
+  <div class="crumb" id="crumb"></div>
+  <div class="topbar__right">
+   <span id="dataset"></span>
+   <button id="bGenerate" class="genbtn">Generate export</button>
+  </div>
+ </header>
+ <div class="app__body">
+  <aside class="rail">
+   <div class="overline">Participant <span class="aux" id="pcount"></span></div>
+   <select id="person"></select>
+   <div class="overline">Date</div>
+   <select id="day"></select>
+   <div class="overline">Layers</div>
+   <label class="lyr"><input type="checkbox" id="lyTrips" checked> Trip lines</label>
+   <label class="lyr"><input type="checkbox" id="lyStraight"> Straight lines (start to end)</label>
+   <label class="lyr"><input type="checkbox" id="lyFlags" checked> Problem flags</label>
+   <label class="lyr"><input type="checkbox" id="lyEnds" checked> Endpoints</label>
+   <div class="overline">On this day</div>
+   <div class="legend" id="legend"></div>
+   <div class="summary" id="summary"></div>
+  </aside>
+  <div class="app__map">
+   <div id="map"></div>
+   <div class="phasenote">Live projection · <b>read-only</b> preview</div>
+  </div>
+  <aside class="insp">
+   <div class="insp-hint"><span class="ic">⚠</span><span>Flags show their current status. Accept / waive arrives next — this view already reflects the live projection.</span></div>
+   <div class="overline insp-sec">Trips <span class="aux" id="tcount"></span></div>
+   <div class="tools">
+    <button id="bNone">None</button>
+    <span class="rng">Show <input id="rFrom" type="number" min="1"> – <input id="rTo" type="number" min="1"></span>
+    <button id="bAll">All</button>
+    <span class="sp" id="nShown"></span>
+   </div>
+   <div id="trips"></div>
+   <div class="overline insp-sec">
+    <span>Flags <span class="aux" id="fcount"></span></span>
+    <span class="rewind"><button id="bUndo">Undo</button><button id="bRedo">Redo</button></span>
+   </div>
+   <div id="flags"></div>
+   <div class="overline insp-sec" id="resolvedHead" style="display:none">
+    <span>Resolved <span class="aux" id="rcount"></span></span>
+    <span class="rewind"><button id="bResolvedToggle">Show</button></span>
+   </div>
+   <div id="resolved" style="display:none"></div>
+  </aside>
+ </div>
+</div>
+<script>window.SID = "{{ sid }}";</script>
+<script type="module" src="{{ url_for('static', filename='review/app.js') }}"></script>
+</body></html>
