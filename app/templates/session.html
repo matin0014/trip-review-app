@@ -45,6 +45,12 @@
     <span class="rng">Show <input id="rFrom" type="number" min="1"> – <input id="rTo" type="number" min="1"></span>
     <button id="bAll">All</button>
     <span class="sp" id="nShown"></span>
+    <button id="bMerge" class="act" title="Enter merge-selection mode">Merge mode</button>
+   </div>
+   <div id="mergeBar" class="merge-bar" style="display:none">
+    <span id="mergeHint">Click trips to select</span>
+    <button id="bMergeCommit" class="act apply" disabled>Merge 0</button>
+    <button id="bMergeCancel">Cancel</button>
    </div>
    <div id="trips"></div>
    <div class="overline insp-sec">

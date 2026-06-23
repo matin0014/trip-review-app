@@ -94,6 +94,14 @@ def classify_pair(prev: Trip, cur: Trip, params: Params = DEFAULT) -> "Flag | No
 
     # Contiguous: the chain is intact, nothing to propose.
     if ev.gap_distance_m <= params.gate_m:
+        if ev.gap_time_min < params.short_gap_fragment_min:
+            return Flag(
+                flag_type="fragment",
+                left=(prev.raw_row,),
+                right=(cur.raw_row,),
+                group=min(prev.raw_row, cur.raw_row),
+                evidence=ev,
+            )
         return None
 
     # v_A > 0 guaranteed these are set.

@@ -4,7 +4,7 @@
 import {S, map} from './state.js';
 import {drawMap} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
-import {loadDays, fillDays, loadDay, rewind} from './api.js';
+import {loadDays, fillDays, loadDay, rewind, manualMerge} from './api.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
@@ -30,5 +30,12 @@ $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 rTo.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 $('bGenerate').onclick = ()=>{window.location.href = `/api/${window.SID}/generate`;};
+$('bMerge').onclick = ()=>{S.mergeMode=true; S.mergeSelected=new Set(); S.render(false);};
+$('bMergeCancel').onclick = ()=>{S.mergeMode=false; S.mergeSelected=new Set(); S.render(false);};
+$('bMergeCommit').onclick = ()=>{
+ const rawRows=[...S.mergeSelected];
+ S.mergeMode=false; S.mergeSelected=new Set();
+ manualMerge(rawRows, S.cur.key);
+};
 
 loadDays();

@@ -72,6 +72,28 @@ def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
     return out
 
 
+def apply_manual_ops(trips: list, ops: list) -> list:
+    """Apply manual edit operations in event order to a trip list.
+
+    Handles ``manual_delete`` (drop the trip) and ``manual_merge`` (combine N
+    into one using the same _merge_group logic as fragment merges). Unknown op
+    types are silently skipped so the function stays forward-compatible when
+    split/add arrive in later steps.
+    """
+    for op in ops:
+        kind = op.get("type")
+        if kind == "manual_delete":
+            trips = [t for t in trips if t.raw_row != op["raw_row"]]
+        elif kind == "manual_merge":
+            raw_rows = set(op["raw_rows"])
+            to_merge = [t for t in trips if t.raw_row in raw_rows]
+            rest = [t for t in trips if t.raw_row not in raw_rows]
+            if len(to_merge) >= 2:
+                trips = sorted(rest + [_merge_group(to_merge)],
+                               key=lambda t: (str(t.person), t.start_ts))
+    return trips
+
+
 def apply_all(trips: list, flags: list) -> list:
     """Project the cleaned trip set with every proposal applied once (no cascade).
 

@@ -14,5 +14,7 @@ export const S = {
   hidden: new Set(),       // seqs toggled off
   sel: null,               // selected trip seq (detail open)
   resolvedOpen: false,     // is the Resolved group expanded
+  mergeMode: false,        // are we in trip-merge selection mode?
+  mergeSelected: new Set(),// raw_rows (t.id) chosen for merge
   render: null,            // (fit) => void — assigned by app.js
 };

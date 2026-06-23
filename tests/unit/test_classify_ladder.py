@@ -58,7 +58,14 @@ def pair(v_a, v_b, gap_m, gap_min, *, va_route=None, vb_route=None):
 
 
 def test_contiguous_under_gate() -> None:
-    assert classify_pair(*pair(30, 30, gap_m=100, gap_min=2)) is None
+    # Gap time >= 3.0 min (short_gap_fragment_min) and distance <= 200m -> None
+    assert classify_pair(*pair(30, 30, gap_m=100, gap_min=4)) is None
+
+def test_short_gap_fragment_under_gate() -> None:
+    # Gap time < 3.0 min and distance <= 200m -> fragment
+    f = classify_pair(*pair(30, 30, gap_m=100, gap_min=2))
+    assert f is not None and f.flag_type == "fragment"
+    assert f.group == 1
 
 
 def test_fragment_same_speed_class() -> None:

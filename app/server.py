@@ -85,13 +85,16 @@ def create_app() -> Flask:
     def api_live_day(sid):
         if not session.exists(sid):
             abort(404)
-        trips = state.day_trips(sid, request.args.get("key", ""))
+        key = request.args.get("key", "")
+        trips = state.day_trips(sid, key)
         if trips is None:
             abort(404)
 
-        res = decisions.resolutions(session.read_events(sid))
+        all_events = session.read_events(sid)
+        res = decisions.resolutions(all_events)
         accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
-        live_trips, surfaced = decisions.fixpoint(trips, accepted)
+        ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == key]
+        live_trips, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 
@@ -123,6 +126,31 @@ def create_app() -> Flask:
                        f"({', '.join(sorted(decisions.VALID_RESOLUTIONS))})")
         session.append_event(sid, {"type": "decision", "flag_id": flag_id,
                                    "resolution": resolution})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_delete")
+    def api_manual_delete(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        if raw_row is None or not day_key:
+            abort(400, "require raw_row and day_key")
+        session.append_event(sid, {"type": "manual_delete", "raw_row": int(raw_row),
+                                   "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_merge")
+    def api_manual_merge(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_rows, day_key = body.get("raw_rows"), body.get("day_key")
+        if not raw_rows or len(raw_rows) < 2 or not day_key:
+            abort(400, "require raw_rows (>=2 items) and day_key")
+        session.append_event(sid, {"type": "manual_merge",
+                                   "raw_rows": [int(r) for r in raw_rows],
+                                   "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

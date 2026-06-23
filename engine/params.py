@@ -40,7 +40,10 @@ class Params:
 
     # --- pair classification (gap geometry) ---
     gate_m: float = 200.0
-    """gap_distance <= this => contiguous (chain intact), no flag."""
+    """gap_distance <= this => contiguous (chain intact), no flag (unless gap time is short)."""
+
+    short_gap_fragment_min: float = 3.0
+    """If gap_distance <= gate_m AND gap_time < this, flag as a fragment instead of contiguous."""
 
     buffer_frac: float = 0.10
     """buffer = buffer_frac * t_expected + buffer_const_min."""
