@@ -153,7 +153,8 @@ def test_zero_move_alone_still_removes_piece():
 
 
 def test_contiguous_day_is_a_noop():
-    trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]  # gap < gate
+    # gap_m = 100, gap_min = (10 - 5) = 5 (using start_min=10, end_min=15)
+    trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 10, 15, 100.0, 150.0)]  # gap < gate, gap_time >= 3 min
     live, surfaced = fixpoint(trips, accepted_ids=set())
     assert [t.raw_row for t in live] == [1, 2]
     assert surfaced == []
