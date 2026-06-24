@@ -2,18 +2,40 @@
 // the Resolved group, the legend, and the trip show/hide range controls.
 
 import {S} from './state.js';
-import {FC, FNAME, FDESC, APPLY_VERB, APPLY_DONE, APPLY_RES, tcol, evLine} from './constants.js';
+import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
+        tcol, flagSummary, flagRows, fmtDist} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide} from './api.js';
+import {decide, manualMode} from './api.js';
 
 const $ = id => document.getElementById(id);
 
+const _ll = p => p ? p[0]+', '+p[1] : 'n/a';
+const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+// The Mode row is interactive: an arrow toggles a list of the workbook's modes
+// (with their average speeds) so the reviewer can relabel this trip's mode.
+function modeRowHTML(t){
+ const open = S.modeOpen && S.sel===t.seq;
+ const list = open ? `<div class="mode-list">`+S.modeSpeeds.map(m=>
+    `<div class="mode-opt${m.mode===t.mode?' cur':''}" data-mode="${m.mode}">`+
+    `<span>${m.mode}</span><span class="mode-sp">${m.avg_kmh} km/h</span></div>`).join('')+`</div>` : '';
+ return `<div class="drow"><span class="k">Mode</span>`+
+   `<span class="v mode-cur">${t.mode} <span class="mode-arrow">${open?'▾':'▸'}</span></span></div>`+list;
+}
+
 function detailHTML(t){
- const rows = [['Start',t.start], ['End',t.end], ['Duration',t.dur+' min'],
-  ['Mode',t.mode], ['Purpose',t.purpose||'—'],
-  ['Speed', t.speed!=null?t.speed+' km/h':'—'],
-  ['Origin', t.s[0]+', '+t.s[1]]];
- return `<div class="detail">`+rows.map(([k,v])=>`<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('')+`</div>`;
+ return `<div class="detail">`+
+  _row('Start',t.start)+_row('End',t.end)+_row('Duration',t.dur+' min')+
+  modeRowHTML(t)+
+  _row('Purpose',t.purpose||'n/a')+
+  _row('Speed', t.speed!=null?t.speed+' km/h':'n/a')+
+  _row('Distance travelled', fmtDist(t.dist_m))+
+  _row('Displacement (start→end)', fmtDist(t.disp_m))+
+  _row('Reported origin', _ll(t.s))+
+  _row('Reported destination', _ll(t.e))+
+  _row('GPS track start', _ll(t.r0))+
+  _row('GPS track end', _ll(t.rN))+
+ `</div>`;
 }
 
 function _mergeSelValid() {
@@ -34,7 +56,7 @@ function _updateMergeBar() {
  const n = S.mergeSelected.size;
  const valid = _mergeSelValid();
  $('mergeHint').textContent = n===0 ? 'Click trips to select'
-  : `${n} trip${n>1?'s':''} selected${valid?'':' — must be consecutive'}`;
+  : `${n} trip${n>1?'s':''} selected${valid?'':', must be consecutive'}`;
  const btn = $('bMergeCommit');
  btn.textContent = `Merge ${n} trip${n>1?'s':''}`;
  btn.disabled = !valid;
@@ -66,25 +88,61 @@ export function renderTrips(){
    };
   } else {
    card.querySelector('.vis').onclick = e=>{e.stopPropagation(); S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render();};
-   card.onclick = ()=>{S.sel=(S.sel===t.seq?null:t.seq); S.render();};
+   card.onclick = ()=>{const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.render();};
+   if(t.seq===S.sel){   // wire the interactive Mode row of the open detail
+    const cur = card.querySelector('.mode-cur');
+    if(cur) cur.onclick = e=>{e.stopPropagation(); S.modeOpen=!S.modeOpen; S.render();};
+    card.querySelectorAll('.mode-opt').forEach(el=>el.onclick = e=>{
+     e.stopPropagation();
+     const m = el.dataset.mode; S.modeOpen=false;
+     if(m!==t.mode) manualMode(t.id, m, S.cur.key); else S.render();
+    });
+   }
   }
   tripsEl.appendChild(card);
  });
  _updateMergeBar();
 }
 
+function flagDetailHTML(f){
+ const rows = flagRows(f).map(([k,v,help])=>
+   `<div class="drow" title="${help}"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+ return `<div class="detail flagdetail">`+
+   `<div class="fd-what">${FLONG[f.type]||''}</div>`+
+   rows+
+   `<div class="fd-act"><span class="fd-verb">${APPLY_VERB[f.type]}:</span> ${APPLY_HELP[f.type]||''}</div>`+
+   `<div class="fd-act"><span class="fd-verb">Waive:</span> ${WAIVE_HELP[f.type]||''}</div>`+
+  `</div>`;
+}
+
 export function flagCard(f){
  const sq = f.seqs.filter(x=>x!=null).map(s=>'#'+s).join(', ');
  const applyRes = APPLY_RES[f.type]||'accept';
  const acc = f.status==='accepted', wv = f.status==='waived';
- const card = document.createElement('div'); card.className='flagrow';
+ const open = S.flagSel===f.id;
+ const card = document.createElement('div'); card.className='flagrow'+(open?' open':'');
  card.innerHTML = `<div class="flagrow__top"><span class="pill" style="background:${FC[f.type]}">${FNAME[f.type]}</span>`+
   `<span class="mono" style="font-size:11px;color:var(--slate-500)">${sq}</span>`+
-  `<span class="status ${f.status}">${f.status}</span></div><div class="ev">${evLine(f.ev||{})}</div>`+
+  `<span class="status ${f.status}">${f.status}</span></div>`+
+  `<div class="ev">${flagSummary(f)}<span class="ev-more">${open?'▾':'▸'}</span></div>`+
+  (open?flagDetailHTML(f):'')+
   `<div class="flag-actions">`+
     `<button class="act apply${acc?' on':''}" title="${acc?'Click to undo':''}">${acc?APPLY_DONE[f.type]:APPLY_VERB[f.type]}</button>`+
     `<button class="act waive${wv?' on waive':''}" title="${wv?'Click to undo':''}">${wv?'Waived':'Waive'}</button></div>`;
- card.querySelector('.apply').onclick = ()=>decide(f.id, acc?'clear':applyRes);
+ // Clicking the type/summary area toggles the expanded explanation.
+ const toggle = ()=>{S.flagSel = open?null:f.id; renderFlags();};
+ card.querySelector('.flagrow__top').onclick = toggle;
+ card.querySelector('.ev').onclick = toggle;
+ card.querySelector('.apply').onclick = ()=>{
+  // Anchor selection to the trip that survives the merge (lowest raw_row of the
+  // members) so the view stays put on what the user just acted on.
+  if(!acc){
+   const ids = f.seqs.filter(x=>x!=null)
+     .map(s=>(S.cur.data.trips.find(t=>t.seq===s)||{}).id).filter(x=>x!=null);
+   if(ids.length) S.selId = Math.min(...ids);
+  }
+  decide(f.id, acc?'clear':applyRes);
+ };
  card.querySelector('.waive').onclick = ()=>decide(f.id, wv?'clear':'waive');
  return card;
 }

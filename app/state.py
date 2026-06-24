@@ -28,11 +28,16 @@ def _load(sid: str) -> dict:
     return days
 
 
-def day_trips(sid: str, key: str) -> "list | None":
-    """The `Trip` objects for one person-day (None if the key is unknown)."""
+def all_days(sid: str) -> dict:
+    """All cached person-day `Trip` lists for a session (loads on a cold cache)."""
     if sid not in _cache:
         _cache[sid] = _load(sid)
-    return _cache[sid].get(key)
+    return _cache[sid]
+
+
+def day_trips(sid: str, key: str) -> "list | None":
+    """The `Trip` objects for one person-day (None if the key is unknown)."""
+    return all_days(sid).get(key)
 
 
 def clear(sid: str = None) -> None:

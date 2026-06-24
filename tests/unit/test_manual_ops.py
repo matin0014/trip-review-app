@@ -37,6 +37,23 @@ def routed(row, smin, emin):
     return t
 
 
+# --- mode -----------------------------------------------------------------
+
+def test_mode_relabels_only_the_target():
+    trips = [mk(1, 0, 10, mode="Auto"), mk(2, 12, 20, mode="Auto")]
+    out = apply_manual_ops(trips, [{"type": "manual_mode", "raw_row": 2, "mode": "Bike"}])
+    assert [(t.raw_row, t.mode) for t in out] == [(1, "Auto"), (2, "Bike")]
+
+
+def test_mode_idempotent_and_last_wins():
+    trips = [mk(1, 0, 10, mode="Auto")]
+    ops = [{"type": "manual_mode", "raw_row": 1, "mode": "Bike"},
+           {"type": "manual_mode", "raw_row": 1, "mode": "Walk"}]
+    once = apply_manual_ops(trips, ops)
+    twice = apply_manual_ops(once, ops)
+    assert once[0].mode == "Walk" and twice[0].mode == "Walk"
+
+
 # --- delete ---------------------------------------------------------------
 
 def test_delete_drops_the_row():

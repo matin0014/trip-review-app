@@ -6,7 +6,7 @@ import {drawMap} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
 import {modeOptions} from './constants.js';
-import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, rFrom, rTo} from './dom.js';
+import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyFollow, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
 
@@ -46,6 +46,7 @@ $('bAddCancel').onclick = exitAdd;
 $('bAddCommit').onclick = ()=>{
  const st=$('addStartTime').value, et=$('addEndTime').value;
  if(S.addPts.length<2 || !st || !et){alert('Place start & end points and set both times.'); return;}
+ if(et<=st){alert('End time must be after the start time.'); return;}  // HH:MM is zero-padded, so string compare is chronological
  const [s,en]=S.addPts;
  manualAdd({day_key:S.cur.key, start_time:st, end_time:et, mode:$('addMode').value,
    start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
@@ -55,6 +56,7 @@ $('bAddCommit').onclick = ()=>{
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
 [lyTrips, lyStraight, lyFlags, lyEnds].forEach(c=>c.onchange=render);
+lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');
 $('bResolvedToggle').onclick = ()=>{S.resolvedOpen=!S.resolvedOpen; renderFlags();};

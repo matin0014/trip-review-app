@@ -29,16 +29,19 @@
    <label class="lyr"><input type="checkbox" id="lyStraight"> Straight lines (start to end)</label>
    <label class="lyr"><input type="checkbox" id="lyFlags" checked> Problem flags</label>
    <label class="lyr"><input type="checkbox" id="lyEnds" checked> Endpoints</label>
+   <label class="lyr"><input type="checkbox" id="lyFollow" checked> Follow selection across edits</label>
    <div class="overline">On this day</div>
    <div class="legend" id="legend"></div>
    <div class="summary" id="summary"></div>
+   <div class="overline">Average speed by mode</div>
+   <div class="modespeeds" id="modespeeds"></div>
   </aside>
   <div class="app__map">
    <div id="map"></div>
    <div class="phasenote">Live projection · <b>read-only</b> preview</div>
   </div>
   <aside class="insp">
-   <div class="insp-hint"><span class="ic">⚠</span><span>Flags show their current status. Accept / waive arrives next — this view already reflects the live projection.</span></div>
+   <div class="insp-hint"><span class="ic">⚠</span><span>Flags show their current status. Click a flag to see what it means and what Accept or Waive will do.</span></div>
    <div class="overline insp-sec">Trips <span class="aux" id="tcount"></span></div>
    <div class="tools">
     <button id="bNone">None</button>

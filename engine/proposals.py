@@ -14,7 +14,7 @@ merge (boundary preservation). missing_activity / mode_change change no geometry
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 
 from engine.ids import with_ids
@@ -95,8 +95,10 @@ def apply_manual_ops(trips: list, ops: list) -> list:
 
     Handles ``manual_delete`` (drop the trip), ``manual_merge`` (combine N into
     one using the same _merge_group logic as fragment merges), ``manual_split``
-    (divide one trip's route at a timestamp into A + B), and ``manual_add`` (drop
-    a hand-placed trip into the day). Unknown op types are silently skipped.
+    (divide one trip's route at a timestamp into A + B), ``manual_add`` (drop a
+    hand-placed trip into the day), and ``manual_mode`` (relabel one trip's travel
+    mode; pure label, since the engine classifies on measured speed). Unknown op
+    types are silently skipped.
 
     Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
     cascade round, so split/add detect their already-materialised piece (by its
@@ -119,6 +121,9 @@ def apply_manual_ops(trips: list, ops: list) -> list:
         elif kind == "manual_add":
             add_n += 1
             trips = _apply_add(trips, op, add_n)
+        elif kind == "manual_mode":
+            row, mode = op["raw_row"], op["mode"]
+            trips = [replace(t, mode=mode) if t.raw_row == row else t for t in trips]
     return trips
 
 
