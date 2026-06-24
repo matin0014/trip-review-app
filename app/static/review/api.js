@@ -56,3 +56,14 @@ export function manualMerge(rawRows, dayKey){
  fetch(`/api/${SID}/manual_merge`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_rows:rawRows, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
+
+export function manualSplit(rawRow, splitTime, modeA, modeB, dayKey){
+ fetch(`/api/${SID}/manual_split`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, split_time:splitTime, mode_a:modeA, mode_b:modeB,
+     day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+
+export function manualAdd(payload){
+ fetch(`/api/${SID}/manual_add`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(payload)}).then(()=>loadDay(false,true));
+}

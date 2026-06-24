@@ -15,9 +15,27 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict
+from datetime import datetime
 
 from engine.ids import with_ids
 from engine.models import Trip
+
+# Stable, position-derived raw_rows for synthesized manual trips. A split's B-piece
+# is keyed off its origin row; an added trip is keyed off its per-day add index.
+# Both are negative and well below any ingest/stub row so they never collide, and
+# stable so the fixpoint loop (which re-applies ops each round) is idempotent.
+_SPLIT_B_OFFSET = 1_000_000
+_ADD_BASE = 2_000_000
+
+
+def split_b_row(orig_row: int) -> int:
+    """The B-piece raw_row for a split of `orig_row`."""
+    return -(orig_row + _SPLIT_B_OFFSET)
+
+
+def add_row(n: int) -> int:
+    """The raw_row for the n-th (1-based) manual add within a day."""
+    return -(_ADD_BASE + n)
 
 
 def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
@@ -75,11 +93,16 @@ def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
 def apply_manual_ops(trips: list, ops: list) -> list:
     """Apply manual edit operations in event order to a trip list.
 
-    Handles ``manual_delete`` (drop the trip) and ``manual_merge`` (combine N
-    into one using the same _merge_group logic as fragment merges). Unknown op
-    types are silently skipped so the function stays forward-compatible when
-    split/add arrive in later steps.
+    Handles ``manual_delete`` (drop the trip), ``manual_merge`` (combine N into
+    one using the same _merge_group logic as fragment merges), ``manual_split``
+    (divide one trip's route at a timestamp into A + B), and ``manual_add`` (drop
+    a hand-placed trip into the day). Unknown op types are silently skipped.
+
+    Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
+    cascade round, so split/add detect their already-materialised piece (by its
+    stable negative raw_row) and no-op the second time through.
     """
+    add_n = 0
     for op in ops:
         kind = op.get("type")
         if kind == "manual_delete":
@@ -91,7 +114,88 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             if len(to_merge) >= 2:
                 trips = sorted(rest + [_merge_group(to_merge)],
                                key=lambda t: (str(t.person), t.start_ts))
+        elif kind == "manual_split":
+            trips = _apply_split(trips, op)
+        elif kind == "manual_add":
+            add_n += 1
+            trips = _apply_add(trips, op, add_n)
     return trips
+
+
+def _split_datetime(s: str, tzinfo) -> datetime:
+    """Parse a naive ``YYYY-MM-DDTHH:MM[:SS]`` split time and attach the trip's
+    timezone so it is comparable to the (tz-aware) trip/route timestamps."""
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None and tzinfo is not None:
+        dt = dt.replace(tzinfo=tzinfo)
+    return dt
+
+
+def _apply_split(trips: list, op: dict) -> list:
+    """Split one trip at ``split_ts`` into A (start..split) + B (split..end).
+
+    A keeps the origin raw_row; B gets the stable `split_b_row`. The route splits
+    by timestamp (<= split -> A, > split -> B); A's end / B's start snap to the
+    last/first route breadcrumb on their side (falling back to the origin endpoint
+    when a side has no breadcrumbs). B inherits the origin purpose (the destination
+    semantics, matching how a merge keeps the last piece's purpose); A's is blank.
+    Out-of-range split times and a missing origin are no-ops; an already-applied
+    split (B present) is a no-op so the fixpoint loop converges.
+    """
+    orig_row = op["raw_row"]
+    b_row = split_b_row(orig_row)
+    by_row = {t.raw_row: t for t in trips}
+    if b_row in by_row:
+        return trips  # already split this pass
+    orig = by_row.get(orig_row)
+    if orig is None:
+        return trips
+    split_ts = _split_datetime(op["split_ts"], orig.start_ts.tzinfo)
+    if not (orig.start_ts < split_ts < orig.end_ts):
+        return trips  # out-of-range split -> no-op
+
+    a_route = [p for p in orig.route if p.ts <= split_ts]
+    b_route = [p for p in orig.route if p.ts > split_ts]
+    a_end = (a_route[-1].lat, a_route[-1].lon) if a_route else (orig.start_lat, orig.start_lon)
+    b_start = (b_route[0].lat, b_route[0].lon) if b_route else a_end
+
+    trip_a = Trip(
+        raw_row=orig_row, person=orig.person, mode=op.get("mode_a") or orig.mode,
+        purpose="", start_ts=orig.start_ts, end_ts=split_ts,
+        start_lat=orig.start_lat, start_lon=orig.start_lon,
+        end_lat=a_end[0], end_lon=a_end[1], route=a_route,
+    )
+    trip_b = Trip(
+        raw_row=b_row, person=orig.person, mode=op.get("mode_b") or orig.mode,
+        purpose=orig.purpose, start_ts=split_ts, end_ts=orig.end_ts,
+        start_lat=b_start[0], start_lon=b_start[1],
+        end_lat=orig.end_lat, end_lon=orig.end_lon, route=b_route,
+    )
+    rest = [t for t in trips if t.raw_row != orig_row]
+    return sorted(rest + [trip_a, trip_b], key=lambda t: (str(t.person), t.start_ts))
+
+
+def _apply_add(trips: list, op: dict, n: int) -> list:
+    """Materialise a hand-placed trip with the stable `add_row(n)` raw_row.
+
+    The trip carries no route (a straight start->end line, like a missing-trip
+    stub). Person and timezone are inferred from the day's existing trips when the
+    op omits them. Already-present (re-applied) -> no-op for fixpoint convergence.
+    """
+    row = add_row(n)
+    if any(t.raw_row == row for t in trips):
+        return trips
+    tz = trips[0].start_ts.tzinfo if trips else None
+    person = op.get("person") if op.get("person") is not None else (trips[0].person if trips else None)
+    trip = Trip(
+        raw_row=row, person=person, mode=op.get("mode") or "Unknown",
+        purpose=op.get("purpose", ""),
+        start_ts=_split_datetime(op["start_ts"], tz),
+        end_ts=_split_datetime(op["end_ts"], tz),
+        start_lat=op["start_lat"], start_lon=op["start_lon"],
+        end_lat=op["end_lat"], end_lon=op["end_lon"], route=[],
+    )
+    return sorted(trips + [trip], key=lambda t: (str(t.person), t.start_ts))
 
 
 def apply_all(trips: list, flags: list) -> list:

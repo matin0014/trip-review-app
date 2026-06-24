@@ -7,49 +7,60 @@
 // top to catch hover + click events reliably.
 
 import {S, map, layer} from './state.js';
-import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES} from './constants.js';
+import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
+        modeOptions, hmToMin, minToHm} from './constants.js';
 import {lyTrips, lyStraight, lyFlags, lyEnds} from './dom.js';
-import {decide, manualDelete} from './api.js';
+import {decide, manualDelete, manualSplit} from './api.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
-const _popup = L.popup({closeButton: false, autoPan: false, className: 'map-popup'});
+const _popup = L.popup({closeButton: false, autoPan: true, className: 'map-popup'});
 
 // Data associated with the currently-open popup (flag or trip object).
 let _popupTarget = null;
-let _popupKind = null; // 'flag' | 'trip'
+let _popupKind = null; // 'flag' | 'trip' | 'split'
 
-map.on('popupopen', () => {
+// Bind the data-action buttons of whatever is currently in the popup. Called on
+// open AND after an in-place content swap (e.g. trip -> split form), so handlers
+// always match the live DOM.
+function _bind() {
  const el = _popup.getElement();
  if (!el) return;
  el.querySelectorAll('[data-action]').forEach(btn => {
-  btn.onclick = e => {
-   e.stopPropagation();
-   const action = btn.dataset.action;
-   if (action === 'close') { _popup.close(); return; }
-   if (_popupKind === 'flag') {
-    const f = _popupTarget;
-    const res = btn.dataset.res;
-    decide(f.id, res);
-    _popup.close();
-   }
-   if (_popupKind === 'trip') {
-    const t = _popupTarget;
-    if (action === 'delete') {
-     if (confirm(`Delete trip #${t.seq} (${t.mode}, ${t.start}–${t.end})?`)) {
-      manualDelete(t.id, S.cur.key);
-     }
-     _popup.close();
-    }
-    if (action === 'merge-enter') {
-     S.mergeMode = true;
-     S.mergeSelected = new Set([t.id]);
-     _popup.close();
-     S.render(false);
-    }
-   }
-  };
+  btn.onclick = e => { e.stopPropagation(); _onAction(btn); };
  });
-});
+}
+map.on('popupopen', _bind);
+
+function _swap(html) { _popup.setContent(html); _bind(); }
+
+function _onAction(btn) {
+ const action = btn.dataset.action;
+ if (action === 'close') { _popup.close(); return; }
+ if (_popupKind === 'flag') {
+  decide(_popupTarget.id, btn.dataset.res);
+  _popup.close();
+ } else if (_popupKind === 'trip') {
+  const t = _popupTarget;
+  if (action === 'delete') {
+   if (confirm(`Delete trip #${t.seq} (${t.mode}, ${t.start}–${t.end})?`)) manualDelete(t.id, S.cur.key);
+   _popup.close();
+  } else if (action === 'merge-enter') {
+   S.mergeMode = true; S.mergeSelected = new Set([t.id]);
+   _popup.close(); S.render(false);
+  } else if (action === 'split-enter') {
+   _popupKind = 'split'; _swap(_splitFormHtml(t));
+  }
+ } else if (_popupKind === 'split') {
+  const t = _popupTarget, el = _popup.getElement();
+  if (action === 'split-commit') {
+   manualSplit(t.id, el.querySelector('.sp-time').value,
+     el.querySelector('.sp-a').value, el.querySelector('.sp-b').value, S.cur.key);
+   _popup.close();
+  } else if (action === 'split-cancel') {
+   _popupKind = 'trip'; _swap(_tripPopupHtml(t));
+  }
+ }
+}
 
 function _flagPopupHtml(f) {
  const applyRes = APPLY_RES[f.type] || 'accept';
@@ -70,7 +81,22 @@ function _tripPopupHtml(t) {
   `<div class="mp-acts">`+
   `<button class="mp-del" data-action="delete">Delete</button>`+
   `<button class="mp-merge" data-action="merge-enter">Merge</button>`+
+  `<button class="mp-split" data-action="split-enter">Split</button>`+
   `</div>`;
+}
+
+// Inline split editor: a time (pre-filled to the trip's midpoint) plus a mode for
+// each resulting piece. A is the leg up to the split, B the leg after.
+function _splitFormHtml(t) {
+ const mid = minToHm((hmToMin(t.start) + hmToMin(t.end)) / 2);
+ return `<div class="mp-head"><span class="mono" style="font-size:12px">Split #${t.seq}</span>`+
+  `<span class="mp-x" data-action="split-cancel">✕</span></div>`+
+  `<div class="mp-form">`+
+  `<label>Split at <input class="sp-time" type="time" value="${mid}" min="${t.start}" max="${t.end}"></label>`+
+  `<label>A mode <select class="sp-a">${modeOptions(t.mode)}</select></label>`+
+  `<label>B mode <select class="sp-b">${modeOptions(t.mode)}</select></label>`+
+  `<div class="mp-acts"><button class="act apply" data-action="split-commit">Split</button>`+
+  `<button data-action="split-cancel">Cancel</button></div></div>`;
 }
 
 function showFlagPopup(f, latlng) {
@@ -126,6 +152,7 @@ export function drawMap(fit){
    // This is what the user actually hovers and clicks; it passes through visually.
    const hit = L.polyline(line, {color:col, weight:20, opacity:0.001}).addTo(layer);
    hit.on('click', e=>{
+    if(S.addMode) return;   // let the map-level handler capture the add point
     L.DomEvent.stopPropagation(e);
     if(S.mergeMode){
      S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
@@ -141,6 +168,7 @@ export function drawMap(fit){
   if(lyEnds.checked){
    L.marker(t.s, {icon:L.divIcon({className:'', iconSize:[22,22], html:`<div class="mapnode" style="background:${col}">${t.seq}</div>`})})
      .addTo(layer).on('click', e=>{
+      if(S.addMode) return;
       L.DomEvent.stopPropagation(e);
       if(S.mergeMode){
        S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
@@ -152,6 +180,12 @@ export function drawMap(fit){
    L.circleMarker(t.e, {radius:5, color:col, weight:2, fillColor:'#fff', fillOpacity:1}).addTo(layer);
   }
  });
+
+ if(S.addMode){   // temp markers for the trip being hand-placed (A start, B end)
+  S.addPts.forEach((p,i)=>L.marker(p, {icon:L.divIcon({className:'', iconSize:[22,22],
+    html:`<div class="mapnode addnode">${i?'B':'A'}</div>`})}).addTo(layer));
+  if(S.addPts.length===2) L.polyline(S.addPts, {color:'#0a58ca', weight:3, dashArray:'6,5'}).addTo(layer);
+ }
 
  if(fit && pts.length) map.fitBounds(pts, {padding:[50,50]});
 

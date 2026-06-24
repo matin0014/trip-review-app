@@ -46,11 +46,21 @@
     <button id="bAll">All</button>
     <span class="sp" id="nShown"></span>
     <button id="bMerge" class="act" title="Enter merge-selection mode">Merge mode</button>
+    <button id="bAdd" class="act" title="Place a new trip on the map">Add trip</button>
    </div>
    <div id="mergeBar" class="merge-bar" style="display:none">
     <span id="mergeHint">Click trips to select</span>
     <button id="bMergeCommit" class="act apply" disabled>Merge 0</button>
     <button id="bMergeCancel">Cancel</button>
+   </div>
+   <div id="addBar" class="merge-bar" style="display:none">
+    <span id="addHint">Click the trip start on the map</span>
+    <span id="addForm" style="display:none">
+     <input id="addStartTime" type="time"> – <input id="addEndTime" type="time">
+     <select id="addMode"></select>
+     <button id="bAddCommit" class="act apply">Add</button>
+    </span>
+    <button id="bAddCancel">Cancel</button>
    </div>
    <div id="trips"></div>
    <div class="overline insp-sec">

@@ -11,6 +11,21 @@ export const APPLY_RES = {fragment:'accept', missing_trip:'accept', zero_move:'a
 export const TC = ["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#00bcd4","#a65628","#f781bf","#666633","#0d6b58","#b8860b","#7b68ee"];
 export const STRAIGHT_COL = "#3d4759";   // straight start→end view: all trips one neutral colour
 
+// Canonical wave2 travel modes for the split/add dropdowns. The engine accepts any
+// string (it keys on measured speed, not the label); an unknown original mode is
+// prepended at render time so it stays selectable.
+export const MODES = ["Walk","Run","Bike","Auto Driver","Auto Passenger","Taxi",
+  "Bus","SkyTrain","Ferry","Other","Unknown"];
+
+// "HH:MM" -> minutes-since-midnight and back, for the split midpoint default.
+export function hmToMin(s){const [h,m]=s.split(':').map(Number);return h*60+m;}
+export function minToHm(t){t=Math.max(0,Math.round(t));const h=Math.floor(t/60)%24,m=t%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
+export function modeOptions(sel){
+  const list = MODES.includes(sel)||!sel ? MODES : [sel, ...MODES];
+  return list.map(m=>`<option value="${m}"${m===sel?' selected':''}>${m}</option>`).join('');
+}
+
 const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 export function weekday(s){const a=s.split('-').map(Number);return WD[new Date(a[0],a[1]-1,a[2]).getDay()];}

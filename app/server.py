@@ -20,6 +20,16 @@ from engine.loader import load_trips
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
 
 
+def _combine_dt(day_key: str, hms: str) -> str:
+    """Rebuild a naive ISO instant from a day_key's date and an ``HH:MM[:SS]``
+    time typed in the UI (the engine attaches the day's timezone)."""
+    date = day_key.split("|", 1)[1]
+    hms = str(hms).strip()
+    if hms.count(":") == 1:
+        hms = f"{hms}:00"
+    return f"{date}T{hms}"
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -151,6 +161,42 @@ def create_app() -> Flask:
         session.append_event(sid, {"type": "manual_merge",
                                    "raw_rows": [int(r) for r in raw_rows],
                                    "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_split")
+    def api_manual_split(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        split_time = body.get("split_time")
+        if raw_row is None or not day_key or not split_time:
+            abort(400, "require raw_row, split_time and day_key")
+        session.append_event(sid, {
+            "type": "manual_split", "raw_row": int(raw_row),
+            "split_ts": _combine_dt(day_key, split_time),
+            "mode_a": body.get("mode_a"), "mode_b": body.get("mode_b"),
+            "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_add")
+    def api_manual_add(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key = body.get("day_key")
+        coords = ("start_lat", "start_lon", "end_lat", "end_lon")
+        times = ("start_time", "end_time")
+        if not day_key or any(body.get(k) is None for k in coords + times):
+            abort(400, "require day_key, start/end times and start/end coordinates")
+        session.append_event(sid, {
+            "type": "manual_add",
+            "start_ts": _combine_dt(day_key, body["start_time"]),
+            "end_ts": _combine_dt(day_key, body["end_time"]),
+            "mode": body.get("mode") or "Unknown", "purpose": body.get("purpose", ""),
+            "start_lat": float(body["start_lat"]), "start_lon": float(body["start_lon"]),
+            "end_lat": float(body["end_lat"]), "end_lon": float(body["end_lon"]),
+            "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

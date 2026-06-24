@@ -16,5 +16,7 @@ export const S = {
   resolvedOpen: false,     // is the Resolved group expanded
   mergeMode: false,        // are we in trip-merge selection mode?
   mergeSelected: new Set(),// raw_rows (t.id) chosen for merge
+  addMode: false,          // are we placing a new (manual_add) trip?
+  addPts: [],              // [[lat,lon], ...] clicked while adding (start, then end)
   render: null,            // (fit) => void — assigned by app.js
 };
