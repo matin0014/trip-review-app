@@ -16,8 +16,46 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from app import baseline, decisions, generate, session, state
 from engine.classify import classify_all
 from engine.loader import load_trips
+from engine.velocity import trip_moving_speed
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
+
+
+def _mode_speeds(sid: str) -> list:
+    """Average moving speed (km/h) per travel mode across the whole workbook.
+
+    A read-only reference for the reviewer: it answers "what speed is normal for
+    this mode" so a trip's measured speed can be sanity-checked against its label.
+    Sorted fastest first; `n` is how many trips back each average."""
+    from collections import defaultdict
+    acc: dict = defaultdict(list)
+    for trips in state.all_days(sid).values():
+        for t in trips:
+            acc[t.mode].append(trip_moving_speed(t))
+    out = [{"mode": m, "avg_kmh": round(sum(v) / len(v), 1), "n": len(v)}
+           for m, v in acc.items() if v]
+    out.sort(key=lambda r: -r["avg_kmh"])
+    return out
+
+
+def _live_pending_counts(sid: str) -> dict:
+    """Map each person-day key -> number of flags still PENDING in the live
+    projection (current engine + this session's decisions). This is what the day
+    dropdown's ⚠ badge shows, so it matches the open day and decrements as flags
+    are resolved, unlike the frozen baseline count, which can also be stale if the
+    session was built by an older engine."""
+    all_events = session.read_events(sid)
+    res = decisions.resolutions(all_events)
+    accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
+    ops_all = decisions.manual_ops(all_events)
+    resolved = decisions.APPLY_RESOLUTIONS | decisions.WAIVE_RESOLUTIONS
+
+    counts: dict = {}
+    for key, trips in state.all_days(sid).items():
+        ops = [op for op in ops_all if op.get("day_key") == key]
+        _, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
+        counts[key] = sum(1 for f in surfaced if res.get(f.flag_id) not in resolved)
+    return counts
 
 
 def _combine_dt(day_key: str, hms: str) -> str:
@@ -67,13 +105,15 @@ def create_app() -> Flask:
         if not session.exists(sid):
             abort(404)
         data = session.read_proposals(sid)
+        pending = _live_pending_counts(sid)
         days = [
             {"key": k, "person": v["person"], "date": v["date"],
-             "n_trips": len(v["trips"]), "n_flags": len(v["flags"])}
+             "n_trips": len(v["trips"]), "n_flags": pending.get(k, 0)}
             for k, v in data["days"].items()
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
-        return jsonify({"raw_name": data["raw_name"], "counts": data["counts"], "days": days})
+        return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
+                        "days": days, "mode_speeds": _mode_speeds(sid)})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):
@@ -148,6 +188,18 @@ def create_app() -> Flask:
             abort(400, "require raw_row and day_key")
         session.append_event(sid, {"type": "manual_delete", "raw_row": int(raw_row),
                                    "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_mode")
+    def api_manual_mode(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, mode, day_key = body.get("raw_row"), body.get("mode"), body.get("day_key")
+        if raw_row is None or not mode or not day_key:
+            abort(400, "require raw_row, mode and day_key")
+        session.append_event(sid, {"type": "manual_mode", "raw_row": int(raw_row),
+                                   "mode": str(mode), "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/manual_merge")

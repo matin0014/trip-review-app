@@ -177,7 +177,7 @@ export function drawMap(fit){
        S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
        S.render(false);
       } else {
-       S.sel=t.seq; S.render();
+       S.sel=t.seq; S.selId=t.id; S.modeOpen=false; S.render();
       }
      });
    L.circleMarker(t.e, {radius:5, color:col, weight:2, fillColor:'#fff', fillOpacity:1}).addTo(layer);

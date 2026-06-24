@@ -35,7 +35,7 @@ from engine.proposals import _make_stub, split_b_row
 
 def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
               params=DEFAULT) -> tuple:
-    """Return ``(rows, extras, surfaced, overrides)`` for one person-day.
+    """Return ``(rows, extras, surfaced, overrides, mode_overrides)`` for one day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
     excluded. `extras` = synthesized rows the caller appends, as
@@ -101,6 +101,19 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
         if op.get("type") == "manual_delete":
             removed.add(op["raw_row"])
 
+    # Manual mode changes -> overwrite mode_of_travel in the cleaned file. When the
+    # target row is part of a merge, every member of that group gets the new mode so
+    # the shared M-row reads consistently (option b).
+    group_members: dict = defaultdict(list)
+    for m, root in merged_root.items():
+        group_members[root].append(m)
+    mode_overrides: dict = {}
+    for op in day_ops:
+        if op.get("type") == "manual_mode":
+            r = op["raw_row"]
+            for tgt in group_members.get(merged_root.get(r, r), [r]):
+                mode_overrides[tgt] = op["mode"]
+
     live_by_row = {t.raw_row: t for t in live}
 
     rows: list = []
@@ -134,7 +147,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
-    return rows, extras, surfaced, overrides
+    return rows, extras, surfaced, overrides, mode_overrides
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -185,16 +198,28 @@ def _apply_split_a_overrides(df, overrides: dict) -> None:
                 df.at[i, col] = v
 
 
+def _apply_mode_overrides(df, mode_overrides: dict) -> None:
+    """Overwrite ``mode_of_travel`` for rows whose mode the reviewer changed by
+    hand (raw_row = df position + 1; out-of-range rows skipped)."""
+    if "mode_of_travel" not in df.columns:
+        return
+    for raw_row, mode in mode_overrides.items():
+        i = raw_row - 1
+        if 0 <= i < len(df):
+            df.at[i, "mode_of_travel"] = mode
+
+
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
                     all_ops: list = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
-    overrides)``.
+    overrides, mode_overrides)``.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
     zero_move or manual delete; `extras` = the add/review/split synthesized rows;
-    `overrides` = {raw_row: live A trip} columns to overwrite on kept split rows.
-    When `res_map` (flag_id -> resolution) is given, `flag_by_row` maps raw_row ->
+    `overrides` = {raw_row: live A trip} columns to overwrite on kept split rows;
+    `mode_overrides` = {raw_row: mode} from manual mode changes. When `res_map`
+    (flag_id -> resolution) is given, `flag_by_row` maps raw_row ->
     ["<type>:<resolution>", ...] for the Do-file; otherwise it is empty. Shared by
     the cleaned xlsx and the Do-file so they never disagree. ``all_ops`` is the
     full ordered list of active manual ops from `decisions.manual_ops`; filtered
@@ -205,10 +230,11 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     extras: list = []
     flag_by_row: dict = defaultdict(list)
     overrides: dict = {}
+    mode_overrides: dict = {}
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
         day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
-        rows, day_extras, surfaced, day_overrides = clean_day(
+        rows, day_extras, surfaced, day_overrides, day_mode_overrides = clean_day(
             day_trips, accepted_ids, day_ops=day_ops, params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
@@ -216,13 +242,14 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         removed |= {x.raw_row for x in day_trips} - present
         extras += day_extras
         overrides.update(day_overrides)
+        mode_overrides.update(day_mode_overrides)
         if res_map is not None:
             for f in surfaced:
                 tag = f"{f.flag_type}:{res_map.get(f.flag_id, 'pending')}"
                 touched = [f.trip] if f.trip is not None else list(f.left) + list(f.right)
                 for r in touched:
                     flag_by_row[r].append(tag)
-    return tid, removed, extras, flag_by_row, overrides
+    return tid, removed, extras, flag_by_row, overrides, mode_overrides
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
@@ -235,9 +262,10 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, _, overrides = project_dataset(raw_path, accepted_ids, params,
-                                                         all_ops=all_ops)
+    tid, removed, extras, _, overrides, mode_overrides = project_dataset(
+        raw_path, accepted_ids, params, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
@@ -295,9 +323,10 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, flag_by_row, overrides = project_dataset(
+    tid, removed, extras, flag_by_row, overrides, mode_overrides = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
 
     def row_id(i):
         r = i + 1

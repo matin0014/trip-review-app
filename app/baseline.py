@@ -10,6 +10,7 @@ only and holds no review state (that arrives later via the decision log).
 from __future__ import annotations
 
 from engine.classify import group_person_days
+from engine.geo import haversine_m
 from engine.ids import with_ids
 from engine.velocity import trip_moving_speed
 
@@ -37,9 +38,17 @@ def _evidence(ev: object) -> dict:
 def serialize_trip(t, seq: int) -> dict:
     """One trip -> JSON (rounded route; falls back to start/end if no breadcrumbs).
 
-    Shared by the baseline and the live recompute so the two never drift."""
-    route = [[_r(p.lat), _r(p.lon)] for p in t.route] or \
+    Shared by the baseline and the live recompute so the two never drift.
+
+    `dist_m` is the distance actually travelled (summed over GPS breadcrumbs);
+    `disp_m` is the straight-line start->end displacement; `r0`/`rN` are the first
+    and last raw breadcrumb (None when the trip carries no route). The reviewer
+    uses them to spot a reported endpoint that sits far from the GPS track."""
+    pts = t.route
+    route = [[_r(p.lat), _r(p.lon)] for p in pts] or \
             [[_r(t.start_lat), _r(t.start_lon)], [_r(t.end_lat), _r(t.end_lon)]]
+    dist_m = sum(haversine_m(a.lat, a.lon, b.lat, b.lon)
+                 for a, b in zip(pts, pts[1:])) if len(pts) >= 2 else None
     return {
         "seq": seq, "id": t.raw_row, "mode": t.mode, "purpose": t.purpose or "",
         "start": t.start_ts.strftime("%H:%M"), "end": t.end_ts.strftime("%H:%M"),
@@ -48,6 +57,11 @@ def serialize_trip(t, seq: int) -> dict:
         "manual": bool((t.purpose or "").strip()),  # user logged a purpose
         "s": [_r(t.start_lat), _r(t.start_lon)],
         "e": [_r(t.end_lat), _r(t.end_lon)],
+        "dist_m": round(dist_m, 1) if dist_m is not None else None,
+        "disp_m": round(haversine_m(t.start_lat, t.start_lon, t.end_lat, t.end_lon), 1),
+        "r0": [_r(pts[0].lat), _r(pts[0].lon)] if pts else None,
+        "rN": [_r(pts[-1].lat), _r(pts[-1].lon)] if pts else None,
+        "npts": len(pts),
         "route": route,
     }
 
