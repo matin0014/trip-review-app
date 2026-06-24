@@ -53,8 +53,11 @@ function _onAction(btn) {
  } else if (_popupKind === 'split') {
   const t = _popupTarget, el = _popup.getElement();
   if (action === 'split-commit') {
-   manualSplit(t.id, el.querySelector('.sp-time').value,
-     el.querySelector('.sp-a').value, el.querySelector('.sp-b').value, S.cur.key);
+   const at = el.querySelector('.sp-time').value;
+   if (!at || at <= t.start || at >= t.end) {   // HH:MM zero-padded -> chronological string compare
+    alert(`Split time must be between ${t.start} and ${t.end}.`); return;
+   }
+   manualSplit(t.id, at, el.querySelector('.sp-a').value, el.querySelector('.sp-b').value, S.cur.key);
    _popup.close();
   } else if (action === 'split-cancel') {
    _popupKind = 'trip'; _swap(_tripPopupHtml(t));

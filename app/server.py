@@ -189,10 +189,14 @@ def create_app() -> Flask:
         times = ("start_time", "end_time")
         if not day_key or any(body.get(k) is None for k in coords + times):
             abort(400, "require day_key, start/end times and start/end coordinates")
+        start_ts = _combine_dt(day_key, body["start_time"])
+        end_ts = _combine_dt(day_key, body["end_time"])
+        if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
+            abort(400, "end time must be after start time")
         session.append_event(sid, {
             "type": "manual_add",
-            "start_ts": _combine_dt(day_key, body["start_time"]),
-            "end_ts": _combine_dt(day_key, body["end_time"]),
+            "start_ts": start_ts,
+            "end_ts": end_ts,
             "mode": body.get("mode") or "Unknown", "purpose": body.get("purpose", ""),
             "start_lat": float(body["start_lat"]), "start_lon": float(body["start_lon"]),
             "end_lat": float(body["end_lat"]), "end_lon": float(body["end_lon"]),

@@ -46,6 +46,7 @@ $('bAddCancel').onclick = exitAdd;
 $('bAddCommit').onclick = ()=>{
  const st=$('addStartTime').value, et=$('addEndTime').value;
  if(S.addPts.length<2 || !st || !et){alert('Place start & end points and set both times.'); return;}
+ if(et<=st){alert('End time must be after the start time.'); return;}  // HH:MM is zero-padded, so string compare is chronological
  const [s,en]=S.addPts;
  manualAdd({day_key:S.cur.key, start_time:st, end_time:et, mode:$('addMode').value,
    start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
