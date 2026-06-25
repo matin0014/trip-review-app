@@ -13,7 +13,7 @@ import os
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 
-from app import baseline, decisions, generate, session, state
+from app import baseline, decisions, generate, routing, session, state
 from engine.classify import classify_all
 from engine.loader import load_socio, load_trips
 
@@ -224,6 +224,18 @@ def create_app() -> Flask:
                                    "mode": str(mode), "day_key": day_key})
         return _state(sid)
 
+    @app.post("/api/<sid>/manual_purpose")
+    def api_manual_purpose(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, purpose, day_key = body.get("raw_row"), body.get("purpose"), body.get("day_key")
+        if raw_row is None or purpose is None or not day_key:
+            abort(400, "require raw_row, purpose and day_key")
+        session.append_event(sid, {"type": "manual_purpose", "raw_row": int(raw_row),
+                                   "purpose": str(purpose), "day_key": day_key})
+        return _state(sid)
+
     @app.post("/api/<sid>/manual_merge")
     def api_manual_merge(sid):
         if not session.exists(sid):
@@ -267,14 +279,39 @@ def create_app() -> Flask:
         end_ts = _combine_dt(day_key, body["end_time"])
         if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
             abort(400, "end time must be after start time")
+        s_lat, s_lon = float(body["start_lat"]), float(body["start_lon"])
+        e_lat, e_lon = float(body["end_lat"]), float(body["end_lon"])
+        mode = body.get("mode") or "Unknown"
+        # OSM shortest path between the two clicked points, computed once and stored
+        # in the op so the pure engine just materialises it (empty -> straight line).
+        route = routing.osrm_route(s_lat, s_lon, e_lat, e_lon, mode)
         session.append_event(sid, {
             "type": "manual_add",
             "start_ts": start_ts,
             "end_ts": end_ts,
-            "mode": body.get("mode") or "Unknown", "purpose": body.get("purpose", ""),
-            "start_lat": float(body["start_lat"]), "start_lon": float(body["start_lon"]),
-            "end_lat": float(body["end_lat"]), "end_lon": float(body["end_lon"]),
+            "mode": mode, "purpose": body.get("purpose", ""),
+            "start_lat": s_lat, "start_lon": s_lon,
+            "end_lat": e_lat, "end_lon": e_lon,
+            "route": route,
             "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_time")
+    def api_manual_time(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        start_time, end_time = body.get("start_time"), body.get("end_time")
+        if raw_row is None or not day_key or not start_time or not end_time:
+            abort(400, "require raw_row, start_time, end_time and day_key")
+        start_ts = _combine_dt(day_key, start_time)
+        end_ts = _combine_dt(day_key, end_time)
+        if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
+            abort(400, "end time must be after start time")
+        session.append_event(sid, {
+            "type": "manual_time", "raw_row": int(raw_row),
+            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

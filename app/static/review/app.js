@@ -5,7 +5,7 @@ import {S, map} from './state.js';
 import {drawMap} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
-import {modeOptions} from './constants.js';
+import {modeOptions, purposeOptions} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
@@ -24,7 +24,7 @@ map.on('moveend', ()=>{if(S.cur.data) drawMap(false);});
 function exitAdd(){S.addMode=false; S.addPts=[]; $('addBar').style.display='none'; S.render(false);}
 function updateAddBar(){
  const n=S.addPts.length, ready=n>=2;
- $('addHint').textContent = ready ? 'Set times & mode for the new trip'
+ $('addHint').textContent = ready ? 'Set times, mode & purpose for the new trip'
    : (n===0 ? 'Click the trip start on the map' : 'Click the trip end on the map');
  $('addForm').style.display = ready ? '' : 'none';
 }
@@ -39,6 +39,7 @@ $('bAdd').onclick = ()=>{
  S.mergeMode=false; S.mergeSelected=new Set();
  S.addMode=true; S.addPts=[];
  $('addMode').innerHTML = modeOptions('Walk');
+ $('addPurpose').innerHTML = purposeOptions('');
  $('addStartTime').value=''; $('addEndTime').value='';
  $('addBar').style.display=''; updateAddBar(); S.render(false);
 };
@@ -49,6 +50,7 @@ $('bAddCommit').onclick = ()=>{
  if(et<=st){alert('End time must be after the start time.'); return;}  // HH:MM is zero-padded, so string compare is chronological
  const [s,en]=S.addPts;
  manualAdd({day_key:S.cur.key, start_time:st, end_time:et, mode:$('addMode').value,
+   purpose:$('addPurpose').value,
    start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
  exitAdd();
 };

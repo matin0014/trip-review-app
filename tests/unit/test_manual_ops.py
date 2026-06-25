@@ -54,6 +54,60 @@ def test_mode_idempotent_and_last_wins():
     assert once[0].mode == "Walk" and twice[0].mode == "Walk"
 
 
+# --- purpose --------------------------------------------------------------
+
+def test_purpose_relabels_only_the_target():
+    trips = [mk(1, 0, 10, purpose=""), mk(2, 12, 20, purpose="Shopping")]
+    out = apply_manual_ops(trips, [{"type": "manual_purpose", "raw_row": 1, "purpose": "Work"}])
+    assert [(t.raw_row, t.purpose) for t in out] == [(1, "Work"), (2, "Shopping")]
+
+
+def test_purpose_idempotent_and_last_wins():
+    trips = [mk(1, 0, 10, purpose="")]
+    ops = [{"type": "manual_purpose", "raw_row": 1, "purpose": "Work"},
+           {"type": "manual_purpose", "raw_row": 1, "purpose": "School"}]
+    once = apply_manual_ops(trips, ops)
+    twice = apply_manual_ops(once, ops)
+    assert once[0].purpose == "School" and twice[0].purpose == "School"
+
+
+# --- time -----------------------------------------------------------------
+
+def test_time_restamps_start_and_end():
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    op = {"type": "manual_time", "raw_row": 1,
+          "start_ts": at(2).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(8).strftime("%Y-%m-%dT%H:%M:%S")}
+    out = apply_manual_ops(trips, [op])
+    edited = [t for t in out if t.raw_row == 1][0]
+    assert edited.start_ts == at(2) and edited.end_ts == at(8)
+    assert edited.start_ts.tzinfo is not None      # tz preserved from the trip
+
+
+def test_time_resorts_when_order_changes():
+    # push trip 1 to AFTER trip 2 -> the list must re-sort by start_ts
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    op = {"type": "manual_time", "raw_row": 1,
+          "start_ts": at(30).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(40).strftime("%Y-%m-%dT%H:%M:%S")}
+    out = apply_manual_ops(trips, [op])
+    assert [t.raw_row for t in out] == [2, 1]
+
+
+def test_time_idempotent_and_last_wins():
+    trips = [mk(1, 0, 10)]
+    ops = [{"type": "manual_time", "raw_row": 1,
+            "start_ts": at(1).strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_ts": at(9).strftime("%Y-%m-%dT%H:%M:%S")},
+           {"type": "manual_time", "raw_row": 1,
+            "start_ts": at(3).strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_ts": at(7).strftime("%Y-%m-%dT%H:%M:%S")}]
+    once = apply_manual_ops(trips, ops)
+    twice = apply_manual_ops(once, ops)
+    assert once[0].start_ts == at(3) and once[0].end_ts == at(7)
+    assert twice[0].start_ts == at(3) and twice[0].end_ts == at(7)
+
+
 # --- delete ---------------------------------------------------------------
 
 def test_delete_drops_the_row():
@@ -154,6 +208,31 @@ def test_add_materialises_trip_with_stable_row():
     assert added.person == "A"                 # inferred from the day
     assert added.start_ts.tzinfo is not None    # tz attached from the day
     assert added.start_ts == at(20) and added.end_ts == at(35)
+
+
+def test_add_with_route_builds_evenly_timed_breadcrumbs():
+    trips = [mk(1, 0, 10)]
+    op = {"type": "manual_add", "mode": "Walk",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(30).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 1.0, "start_lon": 2.0, "end_lat": 3.0, "end_lon": 4.0,
+          "route": [[1.0, 2.0], [1.5, 2.5], [3.0, 4.0]]}    # OSM shortest path
+    out = apply_manual_ops(trips, [op])
+    added = [t for t in out if t.raw_row == add_row(1)][0]
+    assert [(p.lat, p.lon) for p in added.route] == [(1.0, 2.0), (1.5, 2.5), (3.0, 4.0)]
+    # timestamps spread evenly across start..end
+    assert added.route[0].ts == at(20) and added.route[-1].ts == at(30)
+    assert added.route[1].ts == at(25)
+
+
+def test_add_without_route_has_empty_breadcrumbs():
+    trips = [mk(1, 0, 10)]
+    op = {"type": "manual_add", "mode": "Bus",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(35).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 1.0, "start_lon": 2.0, "end_lat": 3.0, "end_lon": 4.0}
+    added = [t for t in apply_manual_ops(trips, [op]) if t.raw_row == add_row(1)][0]
+    assert added.route == []
 
 
 def test_add_indexes_by_position_and_is_idempotent():

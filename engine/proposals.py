@@ -18,7 +18,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 
 from engine.ids import with_ids
-from engine.models import Trip
+from engine.models import RoutePoint, Trip
 
 # Stable, position-derived raw_rows for synthesized manual trips. A split's B-piece
 # is keyed off its origin row; an added trip is keyed off its per-day add index.
@@ -96,9 +96,12 @@ def apply_manual_ops(trips: list, ops: list) -> list:
     Handles ``manual_delete`` (drop the trip), ``manual_merge`` (combine N into
     one using the same _merge_group logic as fragment merges), ``manual_split``
     (divide one trip's route at a timestamp into A + B), ``manual_add`` (drop a
-    hand-placed trip into the day), and ``manual_mode`` (relabel one trip's travel
-    mode; pure label, since the engine classifies on measured speed). Unknown op
-    types are silently skipped.
+    hand-placed trip into the day), ``manual_mode`` (relabel one trip's travel
+    mode; pure label, since the engine classifies on measured speed),
+    ``manual_purpose`` (relabel one trip's purpose; pure label too), and
+    ``manual_time`` (re-stamp one trip's start/end instants; unlike mode this
+    feeds the cascade, since neighbour gaps depend on times). Unknown op types are
+    silently skipped.
 
     Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
     cascade round, so split/add detect their already-materialised piece (by its
@@ -124,6 +127,20 @@ def apply_manual_ops(trips: list, ops: list) -> list:
         elif kind == "manual_mode":
             row, mode = op["raw_row"], op["mode"]
             trips = [replace(t, mode=mode) if t.raw_row == row else t for t in trips]
+        elif kind == "manual_purpose":
+            row, purpose = op["raw_row"], op["purpose"]
+            trips = [replace(t, purpose=purpose) if t.raw_row == row else t for t in trips]
+        elif kind == "manual_time":
+            row = op["raw_row"]
+            out = []
+            for t in trips:
+                if t.raw_row == row:
+                    tz = t.start_ts.tzinfo
+                    t = replace(t, start_ts=_split_datetime(op["start_ts"], tz),
+                                end_ts=_split_datetime(op["end_ts"], tz))
+                out.append(t)
+            # times changed -> re-sort so consecutive-pair classification sees order
+            trips = sorted(out, key=lambda t: (str(t.person), t.start_ts))
     return trips
 
 
@@ -183,24 +200,39 @@ def _apply_split(trips: list, op: dict) -> list:
 def _apply_add(trips: list, op: dict, n: int) -> list:
     """Materialise a hand-placed trip with the stable `add_row(n)` raw_row.
 
-    The trip carries no route (a straight start->end line, like a missing-trip
-    stub). Person and timezone are inferred from the day's existing trips when the
-    op omits them. Already-present (re-applied) -> no-op for fixpoint convergence.
+    If the op carries a ``route`` (a list of ``[lat, lon]`` from the OSM shortest
+    path, computed server-side at add time) it becomes the trip's breadcrumbs with
+    timestamps spread evenly across start..end; otherwise the trip has no route (a
+    straight start->end line, like a missing-trip stub). Person and timezone are
+    inferred from the day's existing trips when the op omits them. Already-present
+    (re-applied) -> no-op for fixpoint convergence.
     """
     row = add_row(n)
     if any(t.raw_row == row for t in trips):
         return trips
     tz = trips[0].start_ts.tzinfo if trips else None
     person = op.get("person") if op.get("person") is not None else (trips[0].person if trips else None)
+    start_ts = _split_datetime(op["start_ts"], tz)
+    end_ts = _split_datetime(op["end_ts"], tz)
     trip = Trip(
         raw_row=row, person=person, mode=op.get("mode") or "Unknown",
         purpose=op.get("purpose", ""),
-        start_ts=_split_datetime(op["start_ts"], tz),
-        end_ts=_split_datetime(op["end_ts"], tz),
+        start_ts=start_ts, end_ts=end_ts,
         start_lat=op["start_lat"], start_lon=op["start_lon"],
-        end_lat=op["end_lat"], end_lon=op["end_lon"], route=[],
+        end_lat=op["end_lat"], end_lon=op["end_lon"],
+        route=_route_from_coords(op.get("route"), start_ts, end_ts),
     )
     return sorted(trips + [trip], key=lambda t: (str(t.person), t.start_ts))
+
+
+def _route_from_coords(coords: list, start_ts, end_ts) -> list:
+    """Turn a ``[[lat, lon], ...]`` shortest-path into timed `RoutePoint`s, spacing
+    timestamps evenly across start..end. Fewer than 2 coords -> empty route."""
+    if not coords or len(coords) < 2:
+        return []
+    step = (end_ts - start_ts) / (len(coords) - 1)
+    return [RoutePoint(float(la), float(lo), start_ts + step * i)
+            for i, (la, lo) in enumerate(coords)]
 
 
 def apply_all(trips: list, flags: list) -> list:

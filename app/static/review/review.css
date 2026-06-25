@@ -50,7 +50,10 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;color:#fff;letter-spacing:.01em}
 .summary{margin-top:18px;font-family:var(--mono);font-size:11px;color:var(--slate-500);line-height:1.5;
   border-top:1px solid var(--paper-200);padding-top:12px}
-.personinfo{font-family:var(--mono);font-size:11px;color:var(--ink-700);margin:6px 0 2px}
+.personinfo{margin:6px 0 2px}
+.pinfo-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0;font-size:12px;border-top:1px solid var(--paper-200)}
+.pinfo-k{color:var(--ink-600)}
+.pinfo-v{font-family:var(--mono);color:var(--ink-950);text-align:right}
 .hwlabel{font-family:var(--sans);font-size:10px;font-weight:600;color:#fff;padding:1px 6px;border-radius:9px;white-space:nowrap;transform:translate(8px,-50%);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .modespeeds{font-size:12px}
 .msrow{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;border-top:1px solid var(--paper-200)}
@@ -93,13 +96,20 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .drow{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;font-size:13px;border-top:1px solid var(--paper-200)}
 .drow .k{color:var(--ink-600)}
 .drow .v{font-family:var(--mono);color:var(--ink-950);text-align:right}
-.mode-cur{cursor:pointer;user-select:none}
+.mode-cur,.purpose-cur{cursor:pointer;user-select:none}
 .mode-arrow{color:var(--slate-500);font-family:var(--sans)}
 .mode-list{margin:2px 0 6px;border:1px solid var(--paper-300);border-radius:6px;overflow:hidden}
-.mode-opt{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:6px 10px;font-size:12.5px;cursor:pointer}
-.mode-opt:hover{background:var(--cobalt-50)}
-.mode-opt.cur{background:var(--paper-100);font-weight:600}
+.mode-opt,.purpose-opt{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:6px 10px;font-size:12.5px;cursor:pointer}
+.mode-opt:hover,.purpose-opt:hover{background:var(--cobalt-50)}
+.mode-opt.cur,.purpose-opt.cur{background:var(--paper-100);font-weight:600}
 .mode-opt .mode-sp{font-family:var(--mono);color:var(--slate-500)}
+.time-edit-link{cursor:pointer;color:var(--cobalt-500);user-select:none}
+.time-edit{margin:6px 0;padding:8px 0;border-top:1px solid var(--paper-200)}
+.time-edit label{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;color:var(--ink-600);margin-bottom:6px}
+.time-edit input[type=time]{font-family:var(--mono);font-size:13px;border:1px solid var(--paper-300);border-radius:6px;padding:3px 7px}
+.time-edit-act{display:flex;gap:6px;margin-top:4px}
+.time-edit-act button{font-family:var(--sans);font-size:12px;border:1px solid var(--paper-300);background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 13px;cursor:pointer}
+.time-edit-act .tm-save{background:var(--cobalt-500);border-color:var(--cobalt-500);color:#fff}
 
 .flagrow{padding:11px 14px;border-bottom:1px solid var(--paper-200)}
 .flagrow.open{background:var(--paper-50)}
@@ -172,8 +182,11 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 
 /* add-trip mode: temp A/B markers + form fields in the add bar */
 .addnode{background:var(--cobalt-500)}
-#addBar{background:rgba(10,88,205,.1);border-bottom-color:rgba(10,88,205,.35)}
-#addHint{flex:1 1 auto}
-#addForm{display:flex;align-items:center;gap:6px}
+#addBar{background:rgba(10,88,205,.1);border-bottom-color:rgba(10,88,205,.35);flex-wrap:wrap}
+/* hint takes its own full row so the form below has the whole panel width */
+#addHint{flex:1 1 100%}
+#addForm{display:flex;align-items:center;flex-wrap:wrap;gap:6px;flex:1 1 100%}
 #addForm input,#addForm select{font-family:var(--mono);font-size:12px;padding:2px 5px;
-  border:1px solid var(--ink-300);border-radius:5px}
+  border:1px solid var(--ink-300);border-radius:5px;min-width:0}
+/* long purpose labels must not blow out the narrow panel */
+#addForm select{max-width:150px}

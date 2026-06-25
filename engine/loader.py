@@ -174,6 +174,17 @@ def load_socio(path: str) -> dict:
             rec["vehicles"] = int(r["numberOfVehicles"])
         if "city" in cols and _text(r["city"]):
             rec["city"] = _text(r["city"])
+        # Optional personal-information fields, shown verbatim when present. Each is
+        # kept only if the column exists and the cell has a value (so the UI shows a
+        # tidy list of just what the workbook actually carries).
+        for col in _PERSON_INFO_FIELDS:
+            if col in cols and _text(r[col]):
+                rec[col] = _text(r[col])
         if rec:
             out[str(person)] = rec
     return out
+
+
+# Personal-information columns surfaced (verbatim) in the reviewer's left rail.
+_PERSON_INFO_FIELDS = ("age", "gender", "hasLicense", "hasTransitPass",
+                       "employmentStatus", "workArrangement")

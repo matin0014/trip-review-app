@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import zipfile
 from collections import defaultdict
+from datetime import datetime
 
 from app import session
 from app.decisions import fixpoint, manual_ops, replay, resolutions
@@ -35,7 +36,8 @@ from engine.proposals import _make_stub, split_b_row
 
 def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
               params=DEFAULT) -> tuple:
-    """Return ``(rows, extras, surfaced, overrides, mode_overrides)`` for one day.
+    """Return ``(rows, extras, surfaced, overrides, mode_overrides, time_overrides,
+    purpose_overrides)`` for one day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
     excluded. `extras` = synthesized rows the caller appends, as
@@ -108,11 +110,25 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     for m, root in merged_root.items():
         group_members[root].append(m)
     mode_overrides: dict = {}
+    purpose_overrides: dict = {}
     for op in day_ops:
         if op.get("type") == "manual_mode":
             r = op["raw_row"]
             for tgt in group_members.get(merged_root.get(r, r), [r]):
                 mode_overrides[tgt] = op["mode"]
+        elif op.get("type") == "manual_purpose":
+            r = op["raw_row"]
+            for tgt in group_members.get(merged_root.get(r, r), [r]):
+                purpose_overrides[tgt] = op["purpose"]
+
+    # Manual time edits -> overwrite the raw row's own start/end date+time columns.
+    # Each physical row keeps its own times (unlike mode's option-b spread): a merged
+    # member's M-row is just a shared id, the underlying rows stay distinct. Last edit
+    # of a row wins (dict assignment in op order).
+    time_overrides: dict = {}
+    for op in day_ops:
+        if op.get("type") == "manual_time":
+            time_overrides[op["raw_row"]] = (op["start_ts"], op["end_ts"])
 
     live_by_row = {t.raw_row: t for t in live}
 
@@ -147,7 +163,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
-    return rows, extras, surfaced, overrides, mode_overrides
+    return rows, extras, surfaced, overrides, mode_overrides, time_overrides, purpose_overrides
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -159,6 +175,16 @@ def _write_atomic_xlsx(df, out: str) -> None:
     with open(tmp, "wb") as fh:
         fh.write(buf.getvalue())
     os.replace(tmp, out)
+
+
+def _route_cell(route) -> str:
+    """Serialize a trip's breadcrumbs back into the raw `routes` cell format: a
+    Python-literal list of ``[lat, lon, "ISO-ts"]`` triplets (so `parse_route`
+    round-trips it). Empty route -> ``"[]"``. A hand-added trip routed via OSM
+    carries breadcrumbs here; a missing-trip / reviewed-gap stub stays ``"[]"``."""
+    if not route:
+        return "[]"
+    return repr([[round(p.lat, 6), round(p.lon, 6), p.ts.isoformat()] for p in route])
 
 
 def _stub_row(stub) -> dict:
@@ -173,7 +199,7 @@ def _stub_row(stub) -> dict:
         "purpose_of_travel": stub.purpose,
         "start_latitude": stub.start_lat, "start_longitude": stub.start_lon,
         "end_latitude": stub.end_lat, "end_longitude": stub.end_lon,
-        "routes": "[]",
+        "routes": _route_cell(stub.route),
     }
 
 
@@ -209,16 +235,48 @@ def _apply_mode_overrides(df, mode_overrides: dict) -> None:
             df.at[i, "mode_of_travel"] = mode
 
 
+def _apply_purpose_overrides(df, purpose_overrides: dict) -> None:
+    """Overwrite ``purpose_of_travel`` for rows whose purpose the reviewer changed
+    by hand (raw_row = df position + 1; out-of-range rows skipped)."""
+    if "purpose_of_travel" not in df.columns:
+        return
+    for raw_row, purpose in purpose_overrides.items():
+        i = raw_row - 1
+        if 0 <= i < len(df):
+            df.at[i, "purpose_of_travel"] = purpose
+
+
+def _apply_time_overrides(df, time_overrides: dict) -> None:
+    """Overwrite the start/end date+time columns for rows whose times the reviewer
+    edited by hand (raw_row = df position + 1; out-of-range rows skipped). The op
+    stores naive ISO instants (``YYYY-MM-DDTHH:MM:SS``); they are split back into
+    the workbook's separate date / time columns, each only if that column exists."""
+    for raw_row, (start_iso, end_iso) in time_overrides.items():
+        i = raw_row - 1
+        if not (0 <= i < len(df)):
+            continue
+        sdt, edt = datetime.fromisoformat(start_iso), datetime.fromisoformat(end_iso)
+        vals = {
+            "start_date": sdt.strftime("%Y-%m-%d"), "start_time": sdt.strftime("%H:%M:%S"),
+            "end_date": edt.strftime("%Y-%m-%d"), "end_time": edt.strftime("%H:%M:%S"),
+        }
+        for col, v in vals.items():
+            if col in df.columns:
+                df.at[i, col] = v
+
+
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
                     all_ops: list = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
-    overrides, mode_overrides)``.
+    overrides, mode_overrides, time_overrides, purpose_overrides)``.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
     zero_move or manual delete; `extras` = the add/review/split synthesized rows;
     `overrides` = {raw_row: live A trip} columns to overwrite on kept split rows;
-    `mode_overrides` = {raw_row: mode} from manual mode changes. When `res_map`
+    `mode_overrides` = {raw_row: mode} from manual mode changes;
+    `time_overrides` = {raw_row: (start_ts, end_ts)} from manual time edits;
+    `purpose_overrides` = {raw_row: purpose} from manual purpose changes. When `res_map`
     (flag_id -> resolution) is given, `flag_by_row` maps raw_row ->
     ["<type>:<resolution>", ...] for the Do-file; otherwise it is empty. Shared by
     the cleaned xlsx and the Do-file so they never disagree. ``all_ops`` is the
@@ -231,10 +289,12 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     flag_by_row: dict = defaultdict(list)
     overrides: dict = {}
     mode_overrides: dict = {}
+    time_overrides: dict = {}
+    purpose_overrides: dict = {}
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
         day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
-        rows, day_extras, surfaced, day_overrides, day_mode_overrides = clean_day(
+        rows, day_extras, surfaced, day_overrides, day_mode_overrides, day_time_overrides, day_purpose_overrides = clean_day(
             day_trips, accepted_ids, day_ops=day_ops, params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
@@ -243,13 +303,15 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         extras += day_extras
         overrides.update(day_overrides)
         mode_overrides.update(day_mode_overrides)
+        time_overrides.update(day_time_overrides)
+        purpose_overrides.update(day_purpose_overrides)
         if res_map is not None:
             for f in surfaced:
                 tag = f"{f.flag_type}:{res_map.get(f.flag_id, 'pending')}"
                 touched = [f.trip] if f.trip is not None else list(f.left) + list(f.right)
                 for r in touched:
                     flag_by_row[r].append(tag)
-    return tid, removed, extras, flag_by_row, overrides, mode_overrides
+    return tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides, purpose_overrides
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
@@ -262,10 +324,12 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, _, overrides, mode_overrides = project_dataset(
+    tid, removed, extras, _, overrides, mode_overrides, time_overrides, purpose_overrides = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
+    _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
+    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
@@ -323,10 +387,12 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, flag_by_row, overrides, mode_overrides = project_dataset(
+    tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides, purpose_overrides = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
+    _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
+    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
 
     def row_id(i):
         r = i + 1

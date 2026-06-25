@@ -3,9 +3,9 @@
 
 import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
-        tcol, flagSummary, flagRows, fmtDist} from './constants.js';
+        tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode} from './api.js';
+import {decide, manualMode, manualPurpose, manualTime} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -22,11 +22,40 @@ function modeRowHTML(t){
    `<span class="v mode-cur">${t.mode} <span class="mode-arrow">${open?'▾':'▸'}</span></span></div>`+list;
 }
 
+// The Purpose row mirrors Mode: an arrow toggles the canonical purpose list so the
+// reviewer can relabel this trip's purpose. The current purpose (if not canonical)
+// is prepended so it stays selectable.
+function purposeRowHTML(t){
+ const open = S.purposeOpen && S.sel===t.seq;
+ const cur = t.purpose || 'n/a';
+ const opts = (PURPOSES.includes(t.purpose)||!t.purpose) ? PURPOSES : [t.purpose, ...PURPOSES];
+ const list = open ? `<div class="mode-list">`+opts.map(p=>
+    `<div class="purpose-opt${p===t.purpose?' cur':''}" data-purpose="${p}"><span>${p}</span></div>`).join('')+`</div>` : '';
+ return `<div class="drow"><span class="k">Purpose</span>`+
+   `<span class="v purpose-cur">${cur} <span class="mode-arrow">${open?'▾':'▸'}</span></span></div>`+list;
+}
+
+// Start/End are display rows with an "Edit times" toggle; open -> two time inputs
+// + Save/Cancel that re-stamp the trip's start/end (a manual_time op, which feeds
+// the cascade since neighbour gaps depend on times).
+function timeRowsHTML(t){
+ if(S.timeOpen && S.sel===t.seq){
+  return `<div class="time-edit">`+
+    `<label>Start <input type="time" class="tm-s" value="${t.start}"></label>`+
+    `<label>End <input type="time" class="tm-e" value="${t.end}"></label>`+
+    `<div class="time-edit-act"><button class="tm-save">Save</button>`+
+    `<button class="tm-cancel">Cancel</button></div></div>`;
+ }
+ return _row('Start',t.start)+_row('End',t.end)+
+   `<div class="drow time-toggle"><span class="k">Times</span>`+
+   `<span class="v time-edit-link">edit ▸</span></div>`;
+}
+
 function detailHTML(t){
  return `<div class="detail">`+
-  _row('Start',t.start)+_row('End',t.end)+_row('Duration',t.dur+' min')+
+  timeRowsHTML(t)+_row('Duration',t.dur+' min')+
   modeRowHTML(t)+
-  _row('Purpose',t.purpose||'n/a')+
+  purposeRowHTML(t)+
   _row('Speed', t.speed!=null?t.speed+' km/h':'n/a')+
   _row('Distance travelled', fmtDist(t.dist_m))+
   _row('Displacement (start→end)', fmtDist(t.disp_m))+
@@ -95,8 +124,24 @@ export function renderTrips(){
      if(m!==t.mode) manualMode(t.id, m, S.cur.key); else S.render();
      return;
     }
-    if(e.target.closest('.mode-cur')){ S.modeOpen=!S.modeOpen; S.render(); return; }
-    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.render();
+    if(e.target.closest('.mode-cur')){ S.modeOpen=!S.modeOpen; S.purposeOpen=false; S.render(); return; }
+    const popt = e.target.closest('.purpose-opt');
+    if(popt){
+     const pr = popt.dataset.purpose; S.purposeOpen=false;
+     if(pr!==t.purpose) manualPurpose(t.id, pr, S.cur.key); else S.render();
+     return;
+    }
+    if(e.target.closest('.purpose-cur')){ S.purposeOpen=!S.purposeOpen; S.modeOpen=false; S.render(); return; }
+    if(e.target.closest('.tm-save')){
+     const s = card.querySelector('.tm-s').value, en = card.querySelector('.tm-e').value;
+     if(!s || !en) return;
+     if(en <= s){ alert('End time must be after start time'); return; }   // HH:MM string compare = chronological within a day
+     S.timeOpen=false; manualTime(t.id, s, en, S.cur.key); return;
+    }
+    if(e.target.closest('.tm-cancel')){ S.timeOpen=false; S.render(); return; }
+    if(e.target.closest('.time-toggle')){ S.timeOpen=!S.timeOpen; S.render(); return; }
+    if(e.target.closest('.time-edit')) return;   // clicks inside the inputs don't collapse the detail
+    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.render();
    };
   }
   tripsEl.appendChild(card);

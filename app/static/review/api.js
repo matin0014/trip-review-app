@@ -3,7 +3,7 @@
 
 import {S, SID} from './state.js';
 import {personSel, daySel, rFrom, rTo} from './dom.js';
-import {weekday} from './constants.js';
+import {weekday, personInfoHTML} from './constants.js';
 
 const $ = id => document.getElementById(id);
 
@@ -60,10 +60,7 @@ export function loadDay(fit=true, keep=false){
   else{rFrom.value=1; rTo.value=d.trips.length;}
   $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
     `<span class="mono">${S.cur.key.split('|')[1]}</span><span class="sep">·</span>${d.trips.length} trips`;
-  const p = S.people[S.cur.person];
-  $('personinfo').textContent = p
-    ? [p.city, p.vehicles!=null?`${p.vehicles} vehicle${p.vehicles===1?'':'s'}`:''].filter(Boolean).join(' · ')
-    : '';
+  $('personinfo').innerHTML = personInfoHTML(S.people[S.cur.person]);
   S.render(fit);   // fit only on a fresh day load, never after an action
  });
 }
@@ -81,6 +78,15 @@ export function manualDelete(rawRow, dayKey){
 export function manualMode(rawRow, mode, dayKey){
  fetch(`/api/${SID}/manual_mode`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_row:rawRow, mode, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+export function manualPurpose(rawRow, purpose, dayKey){
+ fetch(`/api/${SID}/manual_purpose`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, purpose, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+export function manualTime(rawRow, startTime, endTime, dayKey){
+ fetch(`/api/${SID}/manual_time`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, start_time:startTime, end_time:endTime,
+     day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 export function manualMerge(rawRows, dayKey){
  S.selId = Math.min(...rawRows);   // select the merged result (its raw_row = min)

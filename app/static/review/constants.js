@@ -35,6 +35,18 @@ export const STRAIGHT_COL = "#3d4759";   // straight start→end view: all trips
 export const MODES = ["Walk","Run","Bike","Auto Driver","Auto Passenger","Taxi",
   "Bus","SkyTrain","Ferry","Other","Unknown"];
 
+// Canonical wave2 trip purposes for the purpose dropdown / add form. As with
+// modes the engine never reads the label, so any value is accepted; an unknown
+// original purpose is prepended at render time so it stays selectable.
+export const PURPOSES = ["Returning Home","Work","School","Shopping","Recreation",
+  "Social","Dine in at Restaurants/Cafe","Pick-up/drive-through at restaurants/cafe",
+  "Pick-up/Drop-off family/friends","Travel to transit stop","Visiting Doctor/Dentist",
+  "Visiting bank/library/Salon etc.","Working at local/neighborhood workspaces","Other"];
+export function purposeOptions(sel){
+  const list = PURPOSES.includes(sel)||!sel ? PURPOSES : [sel, ...PURPOSES];
+  return list.map(p=>`<option value="${p}"${p===sel?' selected':''}>${p}</option>`).join('');
+}
+
 // "HH:MM" -> minutes-since-midnight and back, for the split midpoint default.
 export function hmToMin(s){const [h,m]=s.split(':').map(Number);return h*60+m;}
 export function minToHm(t){t=Math.max(0,Math.round(t));const h=Math.floor(t/60)%24,m=t%60;
@@ -42,6 +54,21 @@ export function minToHm(t){t=Math.max(0,Math.round(t));const h=Math.floor(t/60)%
 export function modeOptions(sel){
   const list = MODES.includes(sel)||!sel ? MODES : [sel, ...MODES];
   return list.map(m=>`<option value="${m}"${m===sel?' selected':''}>${m}</option>`).join('');
+}
+
+// Personal-information rows for the left rail (label + the socio key), in display
+// order. Only keys actually present on the person record are shown.
+const _PINFO = [
+  ['city', 'City'], ['vehicles', 'Vehicles'], ['age', 'Age'], ['gender', 'Gender'],
+  ['hasLicense', "Driver's license"], ['hasTransitPass', 'Transit pass'],
+  ['employmentStatus', 'Employment'], ['workArrangement', 'Work arrangement'],
+];
+export function personInfoHTML(p){
+  if(!p) return '';
+  const rows = _PINFO.filter(([k])=>p[k]!=null && p[k]!=='')
+    .map(([k,label])=>`<div class="pinfo-row"><span class="pinfo-k">${label}</span>`+
+      `<span class="pinfo-v">${p[k]}</span></div>`).join('');
+  return rows ? `<div class="overline">Personal information</div>${rows}` : '';
 }
 
 const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
