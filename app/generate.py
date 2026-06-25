@@ -203,6 +203,18 @@ def _stub_row(stub) -> dict:
     }
 
 
+def _set_cell(df, i: int, col: str, v) -> None:
+    """Assign ``df.at[i, col] = v``, first widening the column to ``object`` when a
+    string is written into a non-object (e.g. all-NaN float64) column. Without this
+    pandas warns now and will raise in a future version; a workbook column that is
+    entirely blank reads back as float64, so an override would otherwise break."""
+    if col not in df.columns:
+        return
+    if isinstance(v, str) and df[col].dtype != object:
+        df[col] = df[col].astype(object)
+    df.at[i, col] = v
+
+
 def _apply_split_a_overrides(df, overrides: dict) -> None:
     """Overwrite each kept split-origin row to describe the truncated A piece
     (its end time / endpoint / mode / purpose) instead of the full original trip,
@@ -220,30 +232,25 @@ def _apply_split_a_overrides(df, overrides: dict) -> None:
             "mode_of_travel": a.mode, "purpose_of_travel": a.purpose,
         }
         for col, v in vals.items():
-            if col in df.columns:
-                df.at[i, col] = v
+            _set_cell(df, i, col, v)
 
 
 def _apply_mode_overrides(df, mode_overrides: dict) -> None:
     """Overwrite ``mode_of_travel`` for rows whose mode the reviewer changed by
     hand (raw_row = df position + 1; out-of-range rows skipped)."""
-    if "mode_of_travel" not in df.columns:
-        return
     for raw_row, mode in mode_overrides.items():
         i = raw_row - 1
         if 0 <= i < len(df):
-            df.at[i, "mode_of_travel"] = mode
+            _set_cell(df, i, "mode_of_travel", mode)
 
 
 def _apply_purpose_overrides(df, purpose_overrides: dict) -> None:
     """Overwrite ``purpose_of_travel`` for rows whose purpose the reviewer changed
     by hand (raw_row = df position + 1; out-of-range rows skipped)."""
-    if "purpose_of_travel" not in df.columns:
-        return
     for raw_row, purpose in purpose_overrides.items():
         i = raw_row - 1
         if 0 <= i < len(df):
-            df.at[i, "purpose_of_travel"] = purpose
+            _set_cell(df, i, "purpose_of_travel", purpose)
 
 
 def _apply_time_overrides(df, time_overrides: dict) -> None:
@@ -261,8 +268,7 @@ def _apply_time_overrides(df, time_overrides: dict) -> None:
             "end_date": edt.strftime("%Y-%m-%d"), "end_time": edt.strftime("%H:%M:%S"),
         }
         for col, v in vals.items():
-            if col in df.columns:
-                df.at[i, col] = v
+            _set_cell(df, i, col, v)
 
 
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,

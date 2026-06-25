@@ -2,11 +2,11 @@
 // wire the DOM event handlers, and kick off the initial load.
 
 import {S, map} from './state.js';
-import {drawMap} from './mapview.js';
+import {drawMap, regionBounds} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
 import {modeOptions, purposeOptions} from './constants.js';
-import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, rFrom, rTo} from './dom.js';
+import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, lyRegions, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
 
@@ -58,6 +58,8 @@ $('bAddCommit').onclick = ()=>{
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
 [lyTrips, lyStraight, lyFlags, lyEnds, lyHome].forEach(c=>c.onchange=render);
+// Showing the region boxes zooms out to them (at a day's zoom the edges are off-screen).
+lyRegions.onchange = ()=>{ if(lyRegions.checked) map.fitBounds(regionBounds(), {padding:[30,30]}); render(); };
 lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');

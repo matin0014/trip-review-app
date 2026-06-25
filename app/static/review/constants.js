@@ -29,6 +29,14 @@ export const APPLY_RES = {fragment:'accept', missing_trip:'accept', zero_move:'a
 export const TC = ["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#00bcd4","#a65628","#f781bf","#666633","#0d6b58","#b8860b","#7b68ee"];
 export const STRAIGHT_COL = "#3d4759";   // straight start→end view: all trips one neutral colour
 
+// Study-area boxes drawn on the map: the locked-in Vancouver area vs Central
+// Okanagan boundaries for the out-of-region analysis. sw=[lat_lo,lon_lo],
+// ne=[lat_hi,lon_hi]. Keep in sync with app.regions.DEFAULT_REGIONS (the count).
+export const REGION_BOXES = [
+  {name: "Vancouver area",   sw: [49.0, -123.29], ne: [49.39, -122.18], color: "#1558d6"},
+  {name: "Central Okanagan", sw: [49.73, -119.79], ne: [50.51, -119.15], color: "#d9480f"},
+];
+
 // Canonical wave2 travel modes for the split/add dropdowns. The engine accepts any
 // string (it keys on measured speed, not the label); an unknown original mode is
 // prepended at render time so it stays selectable.

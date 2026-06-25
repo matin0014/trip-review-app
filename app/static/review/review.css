@@ -55,6 +55,7 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .pinfo-k{color:var(--ink-600)}
 .pinfo-v{font-family:var(--mono);color:var(--ink-950);text-align:right}
 .hwlabel{font-family:var(--sans);font-size:10px;font-weight:600;color:#fff;padding:1px 6px;border-radius:9px;white-space:nowrap;transform:translate(8px,-50%);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.reglabel{font-family:var(--sans);font-size:10px;font-weight:600;color:#fff;padding:2px 7px;border-radius:4px;white-space:nowrap;transform:translate(4px,4px);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .modespeeds{font-size:12px}
 .msrow{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;border-top:1px solid var(--paper-200)}
 .msmode{color:var(--ink-700)}
