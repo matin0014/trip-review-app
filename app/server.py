@@ -15,27 +15,46 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 
 from app import baseline, decisions, generate, session, state
 from engine.classify import classify_all
-from engine.loader import load_trips
-from engine.velocity import trip_moving_speed
+from engine.loader import load_socio, load_trips
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
 
 
-def _mode_speeds(sid: str) -> list:
-    """Average moving speed (km/h) per travel mode across the whole workbook.
+# Realistic typical speed range (low, high) km/h per travel mode: a fixed
+# yardstick the reviewer can judge a trip's label against, NOT an average measured
+# from this dataset. high == low for a single-value reference. Values follow
+# Canadian commute/transit references; car speed (urban..highway) is reused for
+# every motor-vehicle mode (auto driver/passenger, taxi, vehicle, etc.).
+_CAR = (30, 120)
+_REF_SPEED_KMH = {
+    "Walk": (5, 6), "Running": (10, 12),
+    "Bike": (15, 24), "Shared e-scooter": (15, 24),
+    "Bus": (20, 25), "Transit": (20, 25), "Transit Bus": (20, 25),
+    "SkyTrain": (30, 45), "SeaBus": (15, 15),
+    "Train": (54, 54),
+    "Auto Driver": _CAR, "Auto Passenger": _CAR, "Taxi": _CAR, "Vehicle": _CAR,
+    "Car Share": _CAR, "Motorcycle": _CAR,
+}
 
-    A read-only reference for the reviewer: it answers "what speed is normal for
-    this mode" so a trip's measured speed can be sanity-checked against its label.
-    Sorted fastest first; `n` is how many trips back each average."""
-    from collections import defaultdict
-    acc: dict = defaultdict(list)
-    for trips in state.all_days(sid).values():
-        for t in trips:
-            acc[t.mode].append(trip_moving_speed(t))
-    out = [{"mode": m, "avg_kmh": round(sum(v) / len(v), 1), "n": len(v)}
-           for m, v in acc.items() if v]
-    out.sort(key=lambda r: -r["avg_kmh"])
-    return out
+
+def _fmt_ref(rng) -> "str | None":
+    if rng is None:
+        return None
+    lo, hi = rng
+    return f"~{lo} km/h" if lo == hi else f"~{lo} to {hi} km/h"
+
+
+def _mode_speeds(sid: str) -> list:
+    """Reference speed per travel mode PRESENT in the workbook.
+
+    `ref` is a realistic typical speed (or range) for the mode, a fixed lookup, not
+    an average of this dataset, giving the reviewer a sane yardstick for a trip's
+    label. Modes with no reference are listed with `ref = None`. Sorted fastest
+    first by the top of the range."""
+    modes = {t.mode for trips in state.all_days(sid).values() for t in trips}
+    rows = [{"mode": m, "rng": _REF_SPEED_KMH.get(m)} for m in modes]
+    rows.sort(key=lambda r: (r["rng"] is None, -(r["rng"][1] if r["rng"] else 0), r["mode"]))
+    return [{"mode": r["mode"], "ref": _fmt_ref(r["rng"])} for r in rows]
 
 
 def _live_pending_counts(sid: str) -> dict:
@@ -87,10 +106,12 @@ def create_app() -> Flask:
         try:
             trips = load_trips(path)
             flags = classify_all(trips)
+            people = load_socio(path)  # optional home/work/vehicles; {} if absent
         except Exception as exc:  # surface a bad workbook as a 400, not a 500
             abort(400, f"could not process workbook: {exc}")
 
         data = baseline.build_baseline(trips, flags, os.path.basename(path))
+        data["people"] = people
         session.write_proposals(sid, data)
         return redirect(url_for("review", sid=sid))
 
@@ -113,7 +134,8 @@ def create_app() -> Flask:
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
         return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
-                        "days": days, "mode_speeds": _mode_speeds(sid)})
+                        "days": days, "mode_speeds": _mode_speeds(sid),
+                        "people": data.get("people", {})})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):

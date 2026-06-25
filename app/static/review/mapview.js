@@ -9,7 +9,7 @@
 import {S, map, layer} from './state.js';
 import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
         modeOptions, hmToMin, minToHm} from './constants.js';
-import {lyTrips, lyStraight, lyFlags, lyEnds} from './dom.js';
+import {lyTrips, lyStraight, lyFlags, lyEnds, lyHome} from './dom.js';
 import {decide, manualDelete, manualSplit} from './api.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
@@ -218,4 +218,22 @@ export function drawMap(fit){
    labelMarker.on('click', e=>{L.DomEvent.stopPropagation(e); showFlagPopup(f, mid);});
   });
  }
+
+ drawBubbles();
+}
+
+// Translucent home/work context bubbles for the current participant (optional SD).
+// interactive:false so they never absorb clicks: placing an Add point inside a
+// bubble still registers on the map underneath.
+function drawBubbles(){
+ if(!lyHome.checked) return;
+ const p = S.people[S.cur.person];
+ if(!p) return;
+ const bubble = (ll, label, col) => {
+  L.circle(ll, {radius:50, color:col, weight:2, fillColor:col, fillOpacity:.15, interactive:false}).addTo(layer);
+  L.marker(ll, {interactive:false, icon:L.divIcon({className:'',
+    html:`<div class="hwlabel" style="background:${col}">${label}</div>`})}).addTo(layer);
+ };
+ if(p.home) bubble(p.home, 'Home', '#138a72');
+ if(p.work) bubble(p.work, 'Work', '#2c6fb3');
 }

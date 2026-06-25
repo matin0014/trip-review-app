@@ -9,16 +9,15 @@ import {decide, manualMode} from './api.js';
 
 const $ = id => document.getElementById(id);
 
-const _ll = p => p ? p[0]+', '+p[1] : 'n/a';
 const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 
 // The Mode row is interactive: an arrow toggles a list of the workbook's modes
-// (with their average speeds) so the reviewer can relabel this trip's mode.
+// (with their reference speeds) so the reviewer can relabel this trip's mode.
 function modeRowHTML(t){
  const open = S.modeOpen && S.sel===t.seq;
  const list = open ? `<div class="mode-list">`+S.modeSpeeds.map(m=>
     `<div class="mode-opt${m.mode===t.mode?' cur':''}" data-mode="${m.mode}">`+
-    `<span>${m.mode}</span><span class="mode-sp">${m.avg_kmh} km/h</span></div>`).join('')+`</div>` : '';
+    `<span>${m.mode}</span><span class="mode-sp">${m.ref || ''}</span></div>`).join('')+`</div>` : '';
  return `<div class="drow"><span class="k">Mode</span>`+
    `<span class="v mode-cur">${t.mode} <span class="mode-arrow">${open?'▾':'▸'}</span></span></div>`+list;
 }
@@ -31,10 +30,8 @@ function detailHTML(t){
   _row('Speed', t.speed!=null?t.speed+' km/h':'n/a')+
   _row('Distance travelled', fmtDist(t.dist_m))+
   _row('Displacement (start→end)', fmtDist(t.disp_m))+
-  _row('Reported origin', _ll(t.s))+
-  _row('Reported destination', _ll(t.e))+
-  _row('GPS track start', _ll(t.r0))+
-  _row('GPS track end', _ll(t.rN))+
+  _row('First GPS point', t.r0_t || 'n/a')+
+  _row('Last GPS point', t.rN_t || 'n/a')+
  `</div>`;
 }
 
@@ -87,17 +84,20 @@ export function renderTrips(){
     S.render(false);
    };
   } else {
-   card.querySelector('.vis').onclick = e=>{e.stopPropagation(); S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render();};
-   card.onclick = ()=>{const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.render();};
-   if(t.seq===S.sel){   // wire the interactive Mode row of the open detail
-    const cur = card.querySelector('.mode-cur');
-    if(cur) cur.onclick = e=>{e.stopPropagation(); S.modeOpen=!S.modeOpen; S.render();};
-    card.querySelectorAll('.mode-opt').forEach(el=>el.onclick = e=>{
-     e.stopPropagation();
-     const m = el.dataset.mode; S.modeOpen=false;
+   // One delegated handler: which part of the card was clicked decides the action.
+   card.onclick = (e)=>{
+    if(e.target.closest('.vis')){
+     S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render(); return;
+    }
+    const opt = e.target.closest('.mode-opt');
+    if(opt){
+     const m = opt.dataset.mode; S.modeOpen=false;
      if(m!==t.mode) manualMode(t.id, m, S.cur.key); else S.render();
-    });
-   }
+     return;
+    }
+    if(e.target.closest('.mode-cur')){ S.modeOpen=!S.modeOpen; S.render(); return; }
+    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.render();
+   };
   }
   tripsEl.appendChild(card);
  });

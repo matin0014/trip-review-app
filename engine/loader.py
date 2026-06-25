@@ -128,3 +128,52 @@ def _text(value: object) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
     return str(value).strip()
+
+
+# Study-area coordinate boxes ((lat_lo, lat_hi), (lon_lo, lon_hi)); a home/work
+# point outside every box is a geocoding error (wrong city) and is dropped.
+_REGION_BOXES = (
+    ((48.9, 49.5), (-123.5, -122.3)),   # Metro Vancouver area (not just the city)
+    ((49.6, 50.5), (-119.9, -118.9)),   # Okanagan / Kelowna
+)
+
+
+def _valid_latlon(lat: object, lon: object) -> bool:
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False
+    if math.isnan(lat) or math.isnan(lon):
+        return False
+    return any(a0 <= lat <= a1 and o0 <= lon <= o1
+               for (a0, a1), (o0, o1) in _REGION_BOXES)
+
+
+def load_socio(path: str) -> dict:
+    """Per-person socio-demographic context keyed by accessCode, or ``{}`` when the
+    workbook lacks the optional columns (so callers show nothing when absent).
+
+    Keeps only fields actually present; a home/work point outside the study-area
+    boxes is dropped as a geocoding error. One record per person (the SD columns
+    repeat across that person's trip rows, so the first row wins).
+    """
+    df = pd.read_excel(path)
+    cols = set(df.columns)
+    if "accessCode" not in cols:
+        return {}
+
+    out: dict = {}
+    for person, group in df.groupby("accessCode"):
+        r = group.iloc[0]
+        rec: dict = {}
+        if {"home_latitude", "home_longitude"} <= cols and _valid_latlon(r["home_latitude"], r["home_longitude"]):
+            rec["home"] = [round(float(r["home_latitude"]), 6), round(float(r["home_longitude"]), 6)]
+        if {"work_latitude", "work_longitude"} <= cols and _valid_latlon(r["work_latitude"], r["work_longitude"]):
+            rec["work"] = [round(float(r["work_latitude"]), 6), round(float(r["work_longitude"]), 6)]
+        if "numberOfVehicles" in cols and not pd.isna(r["numberOfVehicles"]):
+            rec["vehicles"] = int(r["numberOfVehicles"])
+        if "city" in cols and _text(r["city"]):
+            rec["city"] = _text(r["city"])
+        if rec:
+            out[str(person)] = rec
+    return out

@@ -10,6 +10,7 @@ export const layer = L.layerGroup().addTo(map);
 
 export const S = {
   byPerson: {},
+  people: {},              // accessCode -> {home,work,vehicles,city} (optional SD)
   modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
   cur: {person:null, key:null, data:null},
   hidden: new Set(),       // seqs toggled off

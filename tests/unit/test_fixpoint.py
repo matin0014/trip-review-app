@@ -54,6 +54,15 @@ def of_type(flags, ftype):
     return next(f for f in flags if f.flag_type == ftype)
 
 
+def test_manual_mode_relabel_survives_the_cascade():
+    # A label-only edit changes no geometry, so the convergence signature must
+    # still register it; otherwise the loop "converges" and drops the relabel.
+    trips = [leg(1, 30, 8, 10, 0.0, 0.0)]
+    op = {"type": "manual_mode", "raw_row": 1, "mode": "Bike", "day_key": "p|d"}
+    live, _ = fixpoint(trips, set(), ops=[op])
+    assert [t.mode for t in live] == ["Bike"]
+
+
 # ---- a fragment-able pair (same speed class, gap 1000 m, 2 min) ----
 def fragment_day():
     return [leg(1, 30, 8, 10, 0.0, 0.0),

@@ -12,10 +12,11 @@ export function loadDays(){
   const c = d.counts;
   $('dataset').textContent = `${d.raw_name}`;
   $('summary').textContent = `${c.trips} trips · ${c.flags} flags\n${c.persons} people · ${c.person_days} person-days`;
+  S.people = d.people || {};
   S.modeSpeeds = d.mode_speeds || [];
   $('modespeeds').innerHTML = S.modeSpeeds.map(m=>
     `<div class="msrow"><span class="msmode">${m.mode}</span>`+
-    `<span class="msval">${m.avg_kmh} km/h</span></div>`).join('')
+    `<span class="msval">${m.ref || 'n/a'}</span></div>`).join('')
     || '<div class="empty" style="padding:0">No modes.</div>';
   S.byPerson = {};
   d.days.forEach(x=>(S.byPerson[x.person]=S.byPerson[x.person]||[]).push(x));
@@ -59,6 +60,10 @@ export function loadDay(fit=true, keep=false){
   else{rFrom.value=1; rTo.value=d.trips.length;}
   $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
     `<span class="mono">${S.cur.key.split('|')[1]}</span><span class="sep">·</span>${d.trips.length} trips`;
+  const p = S.people[S.cur.person];
+  $('personinfo').textContent = p
+    ? [p.city, p.vehicles!=null?`${p.vehicles} vehicle${p.vehicles===1?'':'s'}`:''].filter(Boolean).join(' · ')
+    : '';
   S.render(fit);   // fit only on a fresh day load, never after an action
  });
 }

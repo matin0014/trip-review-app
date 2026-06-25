@@ -6,7 +6,7 @@ import {drawMap} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
 import {modeOptions} from './constants.js';
-import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyFollow, rFrom, rTo} from './dom.js';
+import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
 
@@ -55,7 +55,7 @@ $('bAddCommit').onclick = ()=>{
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
-[lyTrips, lyStraight, lyFlags, lyEnds].forEach(c=>c.onchange=render);
+[lyTrips, lyStraight, lyFlags, lyEnds, lyHome].forEach(c=>c.onchange=render);
 lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');

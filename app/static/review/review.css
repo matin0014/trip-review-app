@@ -50,6 +50,8 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;color:#fff;letter-spacing:.01em}
 .summary{margin-top:18px;font-family:var(--mono);font-size:11px;color:var(--slate-500);line-height:1.5;
   border-top:1px solid var(--paper-200);padding-top:12px}
+.personinfo{font-family:var(--mono);font-size:11px;color:var(--ink-700);margin:6px 0 2px}
+.hwlabel{font-family:var(--sans);font-size:10px;font-weight:600;color:#fff;padding:1px 6px;border-radius:9px;white-space:nowrap;transform:translate(8px,-50%);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .modespeeds{font-size:12px}
 .msrow{display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;border-top:1px solid var(--paper-200)}
 .msmode{color:var(--ink-700)}

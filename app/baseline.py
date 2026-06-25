@@ -41,9 +41,9 @@ def serialize_trip(t, seq: int) -> dict:
     Shared by the baseline and the live recompute so the two never drift.
 
     `dist_m` is the distance actually travelled (summed over GPS breadcrumbs);
-    `disp_m` is the straight-line start->end displacement; `r0`/`rN` are the first
-    and last raw breadcrumb (None when the trip carries no route). The reviewer
-    uses them to spot a reported endpoint that sits far from the GPS track."""
+    `disp_m` is the straight-line start->end displacement; `r0_t`/`rN_t` are the
+    timestamps of the first and last GPS breadcrumb (None when the trip carries no
+    route), so the reviewer can see the actual GPS coverage window."""
     pts = t.route
     route = [[_r(p.lat), _r(p.lon)] for p in pts] or \
             [[_r(t.start_lat), _r(t.start_lon)], [_r(t.end_lat), _r(t.end_lon)]]
@@ -59,8 +59,8 @@ def serialize_trip(t, seq: int) -> dict:
         "e": [_r(t.end_lat), _r(t.end_lon)],
         "dist_m": round(dist_m, 1) if dist_m is not None else None,
         "disp_m": round(haversine_m(t.start_lat, t.start_lon, t.end_lat, t.end_lon), 1),
-        "r0": [_r(pts[0].lat), _r(pts[0].lon)] if pts else None,
-        "rN": [_r(pts[-1].lat), _r(pts[-1].lon)] if pts else None,
+        "r0_t": pts[0].ts.strftime("%H:%M:%S") if pts else None,
+        "rN_t": pts[-1].ts.strftime("%H:%M:%S") if pts else None,
         "npts": len(pts),
         "route": route,
     }

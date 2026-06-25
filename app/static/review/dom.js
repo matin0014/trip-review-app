@@ -5,6 +5,6 @@ const $ = id => document.getElementById(id);
 
 export const personSel = $('person'), daySel = $('day');
 export const lyTrips = $('lyTrips'), lyStraight = $('lyStraight'), lyFlags = $('lyFlags'), lyEnds = $('lyEnds');
-export const lyFollow = $('lyFollow');
+export const lyHome = $('lyHome'), lyFollow = $('lyFollow');
 export const tripsEl = $('trips'), flagsEl = $('flags'), legendEl = $('legend');
 export const rFrom = $('rFrom'), rTo = $('rTo');
