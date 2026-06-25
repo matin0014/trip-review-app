@@ -13,6 +13,7 @@ export function loadDays(){
   $('dataset').textContent = `${d.raw_name}`;
   $('summary').textContent = `${c.trips} trips · ${c.flags} flags\n${c.persons} people · ${c.person_days} person-days`;
   S.modeSpeeds = d.mode_speeds || [];
+  S.purposeOptions = d.purpose_options || [];
   $('modespeeds').innerHTML = S.modeSpeeds.map(m=>
     `<div class="msrow"><span class="msmode">${m.mode}</span>`+
     `<span class="msval">${m.avg_kmh} km/h</span></div>`).join('')
@@ -39,7 +40,7 @@ export function fillDays(){
 // keep=true preserves the current show/hide + selection across a decision
 // (a fresh day load resets them). fit=true re-frames the map (day/person switch).
 export function loadDay(fit=true, keep=false){
- if(!keep){S.hidden=new Set(); S.sel=null; S.resolvedOpen=false;}
+ if(!keep){S.hidden=new Set(); S.sel=null; S.modeOpen=false; S.purposeOpen=false; S.resolvedOpen=false;}
  fetch(`/api/${SID}/live-day?key=`+encodeURIComponent(S.cur.key)).then(r=>r.json()).then(d=>{
   S.cur.data = d;
   // keep the day dropdown's ⚠ badge in sync with the live pending count
@@ -76,6 +77,10 @@ export function manualDelete(rawRow, dayKey){
 export function manualMode(rawRow, mode, dayKey){
  fetch(`/api/${SID}/manual_mode`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_row:rawRow, mode, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+export function manualPurpose(rawRow, purpose, dayKey){
+ fetch(`/api/${SID}/manual_purpose`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, purpose, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 export function manualMerge(rawRows, dayKey){
  S.selId = Math.min(...rawRows);   // select the merged result (its raw_row = min)

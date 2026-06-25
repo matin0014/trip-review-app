@@ -13,7 +13,7 @@ import os
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 
-from app import baseline, decisions, generate, session, state
+from app import baseline, decisions, generate, places, routing, session, state
 from engine.classify import classify_all
 from engine.loader import load_trips
 from engine.velocity import trip_moving_speed
@@ -36,6 +36,17 @@ def _mode_speeds(sid: str) -> list:
            for m, v in acc.items() if v]
     out.sort(key=lambda r: -r["avg_kmh"])
     return out
+
+
+def _purpose_options(sid: str) -> list:
+    """Distinct non-empty purpose labels from the uploaded workbook."""
+    vals = {
+        (t.purpose or "").strip()
+        for trips in state.all_days(sid).values()
+        for t in trips
+        if (t.purpose or "").strip()
+    }
+    return sorted(vals, key=str.casefold)
 
 
 def _live_pending_counts(sid: str) -> dict:
@@ -87,10 +98,11 @@ def create_app() -> Flask:
         try:
             trips = load_trips(path)
             flags = classify_all(trips)
+            places_by_person = places.extract_places(path)
         except Exception as exc:  # surface a bad workbook as a 400, not a 500
             abort(400, f"could not process workbook: {exc}")
 
-        data = baseline.build_baseline(trips, flags, os.path.basename(path))
+        data = baseline.build_baseline(trips, flags, os.path.basename(path), places_by_person)
         session.write_proposals(sid, data)
         return redirect(url_for("review", sid=sid))
 
@@ -113,7 +125,8 @@ def create_app() -> Flask:
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
         return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
-                        "days": days, "mode_speeds": _mode_speeds(sid)})
+                        "days": days, "mode_speeds": _mode_speeds(sid),
+                        "purpose_options": _purpose_options(sid)})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):
@@ -145,6 +158,7 @@ def create_app() -> Flask:
         accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
         ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == key]
         live_trips, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
+        live_trips = routing.enrich_live_routes(live_trips, trips)
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 
@@ -157,6 +171,7 @@ def create_app() -> Flask:
         return jsonify({
             "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
             "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
+            "places": session.read_proposals(sid)["days"].get(key, {}).get("places", []),
         })
 
     @app.get("/api/<sid>/state")
@@ -200,6 +215,19 @@ def create_app() -> Flask:
             abort(400, "require raw_row, mode and day_key")
         session.append_event(sid, {"type": "manual_mode", "raw_row": int(raw_row),
                                    "mode": str(mode), "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_purpose")
+    def api_manual_purpose(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        if raw_row is None or not day_key:
+            abort(400, "require raw_row and day_key")
+        session.append_event(sid, {"type": "manual_purpose", "raw_row": int(raw_row),
+                                   "purpose": str(body.get("purpose") or ""),
+                                   "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/manual_merge")
@@ -252,6 +280,7 @@ def create_app() -> Flask:
             "mode": body.get("mode") or "Unknown", "purpose": body.get("purpose", ""),
             "start_lat": float(body["start_lat"]), "start_lon": float(body["start_lon"]),
             "end_lat": float(body["end_lat"]), "end_lon": float(body["end_lon"]),
+            "route": body.get("route") or [],
             "day_key": day_key})
         return _state(sid)
 

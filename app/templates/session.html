@@ -29,6 +29,7 @@
    <label class="lyr"><input type="checkbox" id="lyStraight"> Straight lines (start to end)</label>
    <label class="lyr"><input type="checkbox" id="lyFlags" checked> Problem flags</label>
    <label class="lyr"><input type="checkbox" id="lyEnds" checked> Endpoints</label>
+   <label class="lyr"><input type="checkbox" id="lyPlaces" checked> Home/work/school buffers</label>
    <label class="lyr"><input type="checkbox" id="lyFollow" checked> Follow selection across edits</label>
    <div class="overline">On this day</div>
    <div class="legend" id="legend"></div>
@@ -61,6 +62,7 @@
     <span id="addForm" style="display:none">
      <input id="addStartTime" type="time"> – <input id="addEndTime" type="time">
      <select id="addMode"></select>
+     <select id="addPurpose"></select>
      <button id="bAddCommit" class="act apply">Add</button>
     </span>
     <button id="bAddCancel">Cancel</button>

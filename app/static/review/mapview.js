@@ -9,15 +9,20 @@
 import {S, map, layer} from './state.js';
 import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
         modeOptions, hmToMin, minToHm} from './constants.js';
-import {lyTrips, lyStraight, lyFlags, lyEnds} from './dom.js';
+import {lyTrips, lyStraight, lyFlags, lyEnds, lyPlaces} from './dom.js';
 import {decide, manualDelete, manualSplit} from './api.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
 const _popup = L.popup({closeButton: false, autoPan: true, className: 'map-popup'});
+const PLACE_COL = {home:'#2ca25f', work:'#756bb1', school:'#de8f05'};
 
 // Data associated with the currently-open popup (flag or trip object).
 let _popupTarget = null;
 let _popupKind = null; // 'flag' | 'trip' | 'split'
+
+function _esc(s) {
+ return String(s || '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // Bind the data-action buttons of whatever is currently in the popup. Called on
 // open AND after an in-place content swap (e.g. trip -> split form), so handlers
@@ -183,6 +188,26 @@ export function drawMap(fit){
    L.circleMarker(t.e, {radius:5, color:col, weight:2, fillColor:'#fff', fillOpacity:1}).addTo(layer);
   }
  });
+
+if(lyPlaces.checked && d.places){
+  d.places.forEach(p=>{
+   if(p.lat==null || p.lon==null) return;
+   const ll = [p.lat, p.lon], col = p.color || PLACE_COL[p.type] || '#555';
+   const interactive = !S.addMode;
+   const circle = L.circle(ll, {
+    radius: p.radius_m || 300,
+    color: col,
+    weight: 2,
+    fillColor: col,
+    fillOpacity: 0.13,
+    interactive,
+   }).addTo(layer);
+   if(interactive) circle.bindPopup(`<b>${_esc(p.label)}</b><br>${_esc(p.address)}<br>${p.radius_m || 300} m buffer`);
+   L.marker(ll, {interactive, icon:L.divIcon({className:'', iconSize:null,
+    html:`<div class="flabel" style="background:${col}">${_esc(p.label)}</div>`})}).addTo(layer);
+   pts.push(ll);
+  });
+ }
 
  if(S.addMode){   // temp markers for the trip being hand-placed (A start, B end)
   S.addPts.forEach((p,i)=>L.marker(p, {icon:L.divIcon({className:'', iconSize:[22,22],

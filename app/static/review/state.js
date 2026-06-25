@@ -11,10 +11,12 @@ export const layer = L.layerGroup().addTo(map);
 export const S = {
   byPerson: {},
   modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
+  purposeOptions: [],      // workbook purpose_of_travel values for manual adds
   cur: {person:null, key:null, data:null},
   hidden: new Set(),       // seqs toggled off
   sel: null,               // selected trip seq (detail open)
   modeOpen: false,         // is the selected trip's mode dropdown expanded
+  purposeOpen: false,      // is the selected trip's purpose dropdown expanded
   flagSel: null,           // expanded flag id (detail open)
   selId: null,             // selected trip's raw_row (stable id, survives renumber)
   followSel: true,         // keep the selection on its trip across an action

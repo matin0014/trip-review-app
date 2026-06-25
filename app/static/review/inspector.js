@@ -3,38 +3,56 @@
 
 import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
-        tcol, flagSummary, flagRows, fmtDist} from './constants.js';
+        MODES, tcol, flagSummary, flagRows, fmtDist} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode} from './api.js';
+import {decide, manualMode, manualPurpose} from './api.js';
 
 const $ = id => document.getElementById(id);
 
 const _ll = p => p ? p[0]+', '+p[1] : 'n/a';
 const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
+ ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // The Mode row is interactive: an arrow toggles a list of the workbook's modes
 // (with their average speeds) so the reviewer can relabel this trip's mode.
 function modeRowHTML(t){
  const open = S.modeOpen && S.sel===t.seq;
- const list = open ? `<div class="mode-list">`+S.modeSpeeds.map(m=>
-    `<div class="mode-opt${m.mode===t.mode?' cur':''}" data-mode="${m.mode}">`+
-    `<span>${m.mode}</span><span class="mode-sp">${m.avg_kmh} km/h</span></div>`).join('')+`</div>` : '';
+ const speeds = Object.fromEntries((S.modeSpeeds || []).map(m=>[m.mode, m.avg_kmh]));
+ const modes = [...new Set([t.mode, ...(S.modeSpeeds || []).map(m=>m.mode), ...MODES].filter(Boolean))];
+ const list = open ? `<div class="mode-list">`+modes.map(m=>{
+    const sp = speeds[m] == null ? '' : `${speeds[m]} km/h`;
+    return `<div class="mode-opt${m===t.mode?' cur':''}" data-mode="${esc(m)}">`+
+      `<span>${esc(m)}</span><span class="mode-sp">${esc(sp)}</span></div>`;
+  }).join('')+`</div>` : '';
  return `<div class="drow"><span class="k">Mode</span>`+
-   `<span class="v mode-cur">${t.mode} <span class="mode-arrow">${open?'▾':'▸'}</span></span></div>`+list;
+   `<span class="v mode-cur">${esc(t.mode)} <span class="mode-arrow">${open?'v':'>'}</span></span></div>`+list;
+}
+
+function purposeRowHTML(t){
+ const open = S.purposeOpen && S.sel===t.seq;
+ const purposes = ['', ...(S.purposeOptions || [])];
+ if(t.purpose && !purposes.includes(t.purpose)) purposes.unshift(t.purpose);
+ const list = open ? `<div class="mode-list purpose-list">`+
+  [...new Set(purposes)].map(p=>
+    `<div class="mode-opt purpose-opt${(p||'')===(t.purpose||'')?' cur':''}" data-purpose="${esc(p)}">`+
+    `<span>${p?esc(p):'No purpose'}</span></div>`).join('')+`</div>` : '';
+ return `<div class="drow"><span class="k">Purpose</span>`+
+   `<span class="v purpose-cur">${t.purpose?esc(t.purpose):'n/a'} <span class="mode-arrow">${open?'v':'>'}</span></span></div>`+list;
 }
 
 function detailHTML(t){
  return `<div class="detail">`+
   _row('Start',t.start)+_row('End',t.end)+_row('Duration',t.dur+' min')+
   modeRowHTML(t)+
-  _row('Purpose',t.purpose||'n/a')+
+  purposeRowHTML(t)+
   _row('Speed', t.speed!=null?t.speed+' km/h':'n/a')+
   _row('Distance travelled', fmtDist(t.dist_m))+
-  _row('Displacement (start→end)', fmtDist(t.disp_m))+
+  _row('Displacement (start-end)', fmtDist(t.disp_m))+
   _row('Reported origin', _ll(t.s))+
   _row('Reported destination', _ll(t.e))+
-  _row('GPS track start', _ll(t.r0))+
-  _row('GPS track end', _ll(t.rN))+
+  _row('GPS track start', t.r0_time || 'n/a')+
+  _row('GPS track end', t.rN_time || 'n/a')+
  `</div>`;
 }
 
@@ -73,11 +91,12 @@ export function renderTrips(){
    +(S.hidden.has(t.seq)?' hidden':'')
    +(mergeSel?' merge-sel':'');
   const logged = t.manual?`<span class="logged">logged</span>`:'';
+  const sub = esc(t.mode)+(t.purpose?' - '+esc(t.purpose):'');
   card.innerHTML = `<div class="row__head">`+
    `<span class="node" style="background:${tcol(t.seq)}">${t.seq}</span>`+
-   `<div class="row__main"><div class="row__time"><span class="mono">${t.start}–${t.end}</span>${logged}`+
-   `<span class="mono" style="color:var(--slate-500)">${t.dur}m</span></div>`+
-   `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}</div></div>`+
+   `<div class="row__main"><div class="row__time"><span class="mono">${esc(t.start)}-${esc(t.end)}</span>${logged}`+
+   `<span class="mono" style="color:var(--slate-500)">${esc(t.dur)}m</span></div>`+
+   `<div class="row__sub">${sub}</div></div>`+
    (S.mergeMode ? '' : `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span>`)+
    `</div>`+
    (t.seq===S.sel&&!S.mergeMode?detailHTML(t):'');
@@ -88,14 +107,22 @@ export function renderTrips(){
    };
   } else {
    card.querySelector('.vis').onclick = e=>{e.stopPropagation(); S.hidden.has(t.seq)?S.hidden.delete(t.seq):S.hidden.add(t.seq); S.render();};
-   card.onclick = ()=>{const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.render();};
-   if(t.seq===S.sel){   // wire the interactive Mode row of the open detail
+   card.onclick = ()=>{const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.render();};
+   if(t.seq===S.sel){
     const cur = card.querySelector('.mode-cur');
-    if(cur) cur.onclick = e=>{e.stopPropagation(); S.modeOpen=!S.modeOpen; S.render();};
-    card.querySelectorAll('.mode-opt').forEach(el=>el.onclick = e=>{
+    if(cur) cur.onclick = e=>{e.stopPropagation(); S.modeOpen=!S.modeOpen; S.purposeOpen=false; S.render();};
+    card.querySelectorAll('.mode-opt[data-mode]').forEach(el=>el.onclick = e=>{
      e.stopPropagation();
      const m = el.dataset.mode; S.modeOpen=false;
      if(m!==t.mode) manualMode(t.id, m, S.cur.key); else S.render();
+    });
+
+    const pcur = card.querySelector('.purpose-cur');
+    if(pcur) pcur.onclick = e=>{e.stopPropagation(); S.purposeOpen=!S.purposeOpen; S.modeOpen=false; S.render();};
+    card.querySelectorAll('.purpose-opt').forEach(el=>el.onclick = e=>{
+     e.stopPropagation();
+     const p = el.dataset.purpose || ''; S.purposeOpen=false;
+     if(p!==(t.purpose||'')) manualPurpose(t.id, p, S.cur.key); else S.render();
     });
    }
   }
@@ -106,12 +133,12 @@ export function renderTrips(){
 
 function flagDetailHTML(f){
  const rows = flagRows(f).map(([k,v,help])=>
-   `<div class="drow" title="${help}"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+   `<div class="drow" title="${esc(help)}"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
  return `<div class="detail flagdetail">`+
-   `<div class="fd-what">${FLONG[f.type]||''}</div>`+
+   `<div class="fd-what">${esc(FLONG[f.type]||'')}</div>`+
    rows+
-   `<div class="fd-act"><span class="fd-verb">${APPLY_VERB[f.type]}:</span> ${APPLY_HELP[f.type]||''}</div>`+
-   `<div class="fd-act"><span class="fd-verb">Waive:</span> ${WAIVE_HELP[f.type]||''}</div>`+
+   `<div class="fd-act"><span class="fd-verb">${esc(APPLY_VERB[f.type])}:</span> ${esc(APPLY_HELP[f.type]||'')}</div>`+
+   `<div class="fd-act"><span class="fd-verb">Waive:</span> ${esc(WAIVE_HELP[f.type]||'')}</div>`+
   `</div>`;
 }
 
@@ -121,13 +148,13 @@ export function flagCard(f){
  const acc = f.status==='accepted', wv = f.status==='waived';
  const open = S.flagSel===f.id;
  const card = document.createElement('div'); card.className='flagrow'+(open?' open':'');
- card.innerHTML = `<div class="flagrow__top"><span class="pill" style="background:${FC[f.type]}">${FNAME[f.type]}</span>`+
-  `<span class="mono" style="font-size:11px;color:var(--slate-500)">${sq}</span>`+
-  `<span class="status ${f.status}">${f.status}</span></div>`+
-  `<div class="ev">${flagSummary(f)}<span class="ev-more">${open?'▾':'▸'}</span></div>`+
+ card.innerHTML = `<div class="flagrow__top"><span class="pill" style="background:${FC[f.type]}">${esc(FNAME[f.type])}</span>`+
+  `<span class="mono" style="font-size:11px;color:var(--slate-500)">${esc(sq)}</span>`+
+  `<span class="status ${esc(f.status)}">${esc(f.status)}</span></div>`+
+  `<div class="ev">${esc(flagSummary(f))}<span class="ev-more">${open?'v':'>'}</span></div>`+
   (open?flagDetailHTML(f):'')+
   `<div class="flag-actions">`+
-    `<button class="act apply${acc?' on':''}" title="${acc?'Click to undo':''}">${acc?APPLY_DONE[f.type]:APPLY_VERB[f.type]}</button>`+
+    `<button class="act apply${acc?' on':''}" title="${acc?'Click to undo':''}">${acc?esc(APPLY_DONE[f.type]):esc(APPLY_VERB[f.type])}</button>`+
     `<button class="act waive${wv?' on waive':''}" title="${wv?'Click to undo':''}">${wv?'Waived':'Waive'}</button></div>`;
  // Clicking the type/summary area toggles the expanded explanation.
  const toggle = ()=>{S.flagSel = open?null:f.id; renderFlags();};
@@ -171,9 +198,17 @@ export function renderFlags(){
 
 export function renderLegend(){
  const types = [...new Set(S.cur.data.flags.map(f=>f.type))];
- legendEl.innerHTML = types.length ? types.map(ty=>
-   `<div class="ft"><span class="pill" style="background:${FC[ty]}">${FNAME[ty]}</span><div class="desc">${FDESC[ty]}</div></div>`).join('')
+ const flagLegend = types.length ? types.map(ty=>
+   `<div class="ft"><span class="pill" style="background:${FC[ty]}">${esc(FNAME[ty])}</span><div class="desc">${esc(FDESC[ty])}</div></div>`).join('')
    : '<div class="empty" style="padding:0">No flags on this day.</div>';
+ const places = S.cur.data.places || [];
+ const placeLegend = places.length ? [
+   ['#2ca25f', 'Home', '300 m home-address buffer'],
+   ['#756bb1', 'Work', '300 m work-address buffer'],
+   ['#de8f05', 'School', '300 m school-address buffer'],
+ ].map(([col, name, desc])=>
+   `<div class="ft"><span class="pill" style="background:${col}">${esc(name)}</span><div class="desc">${esc(desc)}</div></div>`).join('') : '';
+ legendEl.innerHTML = flagLegend + placeLegend;
 }
 
 export function setRange(a,b){

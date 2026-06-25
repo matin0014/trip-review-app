@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from engine.ids import with_ids
-from engine.models import Trip
+from engine.models import RoutePoint, Trip
 
 # Stable, position-derived raw_rows for synthesized manual trips. A split's B-piece
 # is keyed off its origin row; an added trip is keyed off its per-day add index.
@@ -96,9 +96,10 @@ def apply_manual_ops(trips: list, ops: list) -> list:
     Handles ``manual_delete`` (drop the trip), ``manual_merge`` (combine N into
     one using the same _merge_group logic as fragment merges), ``manual_split``
     (divide one trip's route at a timestamp into A + B), ``manual_add`` (drop a
-    hand-placed trip into the day), and ``manual_mode`` (relabel one trip's travel
-    mode; pure label, since the engine classifies on measured speed). Unknown op
-    types are silently skipped.
+    hand-placed trip into the day), ``manual_mode`` (relabel one trip's travel
+    mode; pure label, since the engine classifies on measured speed), and
+    ``manual_purpose`` (relabel one trip's destination purpose). Unknown op types
+    are silently skipped.
 
     Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
     cascade round, so split/add detect their already-materialised piece (by its
@@ -124,6 +125,9 @@ def apply_manual_ops(trips: list, ops: list) -> list:
         elif kind == "manual_mode":
             row, mode = op["raw_row"], op["mode"]
             trips = [replace(t, mode=mode) if t.raw_row == row else t for t in trips]
+        elif kind == "manual_purpose":
+            row, purpose = op["raw_row"], op.get("purpose", "")
+            trips = [replace(t, purpose=purpose) if t.raw_row == row else t for t in trips]
     return trips
 
 
@@ -200,7 +204,36 @@ def _apply_add(trips: list, op: dict, n: int) -> list:
         start_lat=op["start_lat"], start_lon=op["start_lon"],
         end_lat=op["end_lat"], end_lon=op["end_lon"], route=[],
     )
+    trip.route = _manual_route(op.get("route"), trip)
     return sorted(trips + [trip], key=lambda t: (str(t.person), t.start_ts))
+
+
+def _manual_route(route: object, trip: Trip) -> list[RoutePoint]:
+    """Turn a posted [[lat, lon], ...] route into evenly-timed breadcrumbs."""
+    points = []
+    if isinstance(route, list):
+        for item in route:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                try:
+                    points.append((float(item[0]), float(item[1])))
+                except (TypeError, ValueError):
+                    continue
+    if len(points) < 2:
+        return []
+
+    first = points[0]
+    last = points[-1]
+    if (round(first[0], 7), round(first[1], 7)) != (round(trip.start_lat, 7), round(trip.start_lon, 7)):
+        points.insert(0, (trip.start_lat, trip.start_lon))
+    if (round(last[0], 7), round(last[1], 7)) != (round(trip.end_lat, 7), round(trip.end_lon, 7)):
+        points.append((trip.end_lat, trip.end_lon))
+
+    span = trip.end_ts - trip.start_ts
+    step = span / (len(points) - 1) if len(points) > 1 else timedelta(0)
+    return [
+        RoutePoint(lat, lon, trip.start_ts + step * i)
+        for i, (lat, lon) in enumerate(points)
+    ]
 
 
 def apply_all(trips: list, flags: list) -> list:

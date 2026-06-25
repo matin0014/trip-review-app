@@ -35,7 +35,8 @@ from engine.proposals import _make_stub, split_b_row
 
 def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
               params=DEFAULT) -> tuple:
-    """Return ``(rows, extras, surfaced, overrides, mode_overrides)`` for one day.
+    """Return ``(rows, extras, surfaced, overrides, purpose_overrides,
+    mode_overrides)`` for one day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
     excluded. `extras` = synthesized rows the caller appends, as
@@ -53,6 +54,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     `overrides` = ``{raw_row: live_trip}`` for split A-pieces: the origin raw row
     stays in the file as ``S<row>-A`` but its end time / mode / endpoint must be
     overwritten to the truncated A piece (so A + B do not double-count the span).
+    `purpose_overrides` / `mode_overrides` = raw-row labels the reviewer changed.
     ``day_ops`` = currently-active manual edits for this day (from `manual_ops`).
     """
     day_ops = day_ops or []
@@ -115,6 +117,15 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
                 mode_overrides[tgt] = op["mode"]
 
     live_by_row = {t.raw_row: t for t in live}
+    purpose_overrides: dict = {}
+    for op in day_ops:
+        if op.get("type") == "manual_purpose":
+            r = op["raw_row"]
+            live_target = live_by_row.get(r)
+            purpose = live_target.purpose if live_target is not None else op.get("purpose", "")
+            for tgt in group_members.get(merged_root.get(r, r), [r]):
+                if tgt > 0:
+                    purpose_overrides[tgt] = purpose
 
     rows: list = []
     overrides: dict = {}
@@ -147,7 +158,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
-    return rows, extras, surfaced, overrides, mode_overrides
+    return rows, extras, surfaced, overrides, purpose_overrides, mode_overrides
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -173,8 +184,17 @@ def _stub_row(stub) -> dict:
         "purpose_of_travel": stub.purpose,
         "start_latitude": stub.start_lat, "start_longitude": stub.start_lon,
         "end_latitude": stub.end_lat, "end_longitude": stub.end_lon,
-        "routes": "[]",
+        "routes": _route_cell(stub),
     }
+
+
+def _route_cell(trip) -> str:
+    if not trip.route:
+        return "[]"
+    return str([
+        [round(p.lat, 7), round(p.lon, 7), p.ts.isoformat()]
+        for p in trip.route
+    ])
 
 
 def _apply_split_a_overrides(df, overrides: dict) -> None:
@@ -209,10 +229,21 @@ def _apply_mode_overrides(df, mode_overrides: dict) -> None:
             df.at[i, "mode_of_travel"] = mode
 
 
+def _apply_purpose_overrides(df, purpose_overrides: dict) -> None:
+    """Overwrite ``purpose_of_travel`` for rows whose purpose the reviewer changed
+    by hand (raw_row = df position + 1; out-of-range rows skipped)."""
+    if "purpose_of_travel" not in df.columns:
+        return
+    for raw_row, purpose in purpose_overrides.items():
+        i = raw_row - 1
+        if 0 <= i < len(df):
+            df.at[i, "purpose_of_travel"] = purpose
+
+
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
                     all_ops: list = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
-    overrides, mode_overrides)``.
+    overrides, purpose_overrides, mode_overrides)``.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
@@ -230,11 +261,12 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     extras: list = []
     flag_by_row: dict = defaultdict(list)
     overrides: dict = {}
+    purpose_overrides: dict = {}
     mode_overrides: dict = {}
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
         day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
-        rows, day_extras, surfaced, day_overrides, day_mode_overrides = clean_day(
+        rows, day_extras, surfaced, day_overrides, day_purpose_overrides, day_mode_overrides = clean_day(
             day_trips, accepted_ids, day_ops=day_ops, params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
@@ -242,6 +274,7 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         removed |= {x.raw_row for x in day_trips} - present
         extras += day_extras
         overrides.update(day_overrides)
+        purpose_overrides.update(day_purpose_overrides)
         mode_overrides.update(day_mode_overrides)
         if res_map is not None:
             for f in surfaced:
@@ -249,7 +282,7 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                 touched = [f.trip] if f.trip is not None else list(f.left) + list(f.right)
                 for r in touched:
                     flag_by_row[r].append(tag)
-    return tid, removed, extras, flag_by_row, overrides, mode_overrides
+    return tid, removed, extras, flag_by_row, overrides, purpose_overrides, mode_overrides
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
@@ -262,9 +295,10 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, _, overrides, mode_overrides = project_dataset(
+    tid, removed, extras, _, overrides, purpose_overrides, mode_overrides = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
 
     n = len(df)
@@ -323,9 +357,10 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, flag_by_row, overrides, mode_overrides = project_dataset(
+    tid, removed, extras, flag_by_row, overrides, purpose_overrides, mode_overrides = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
 
     def row_id(i):

@@ -54,6 +54,23 @@ def test_mode_idempotent_and_last_wins():
     assert once[0].mode == "Walk" and twice[0].mode == "Walk"
 
 
+# --- purpose --------------------------------------------------------------
+
+def test_purpose_relabels_only_the_target():
+    trips = [mk(1, 0, 10, purpose="Home"), mk(2, 12, 20, purpose="Shop")]
+    out = apply_manual_ops(trips, [{"type": "manual_purpose", "raw_row": 2, "purpose": "Work"}])
+    assert [(t.raw_row, t.purpose) for t in out] == [(1, "Home"), (2, "Work")]
+
+
+def test_purpose_idempotent_and_last_wins():
+    trips = [mk(1, 0, 10, purpose="Home")]
+    ops = [{"type": "manual_purpose", "raw_row": 1, "purpose": "Work"},
+           {"type": "manual_purpose", "raw_row": 1, "purpose": "School"}]
+    once = apply_manual_ops(trips, ops)
+    twice = apply_manual_ops(once, ops)
+    assert once[0].purpose == "School" and twice[0].purpose == "School"
+
+
 # --- delete ---------------------------------------------------------------
 
 def test_delete_drops_the_row():
@@ -154,6 +171,19 @@ def test_add_materialises_trip_with_stable_row():
     assert added.person == "A"                 # inferred from the day
     assert added.start_ts.tzinfo is not None    # tz attached from the day
     assert added.start_ts == at(20) and added.end_ts == at(35)
+
+
+def test_add_preserves_posted_route_points():
+    trips = [mk(1, 0, 10)]
+    op = {"type": "manual_add", "mode": "Bus",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(30).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 1.0, "start_lon": 2.0, "end_lat": 1.2, "end_lon": 2.2,
+          "route": [[1.0, 2.0], [1.1, 2.1], [1.2, 2.2]]}
+    out = apply_manual_ops(trips, [op])
+    added = [t for t in out if t.raw_row == add_row(1)][0]
+    assert [(p.lat, p.lon) for p in added.route] == [(1.0, 2.0), (1.1, 2.1), (1.2, 2.2)]
+    assert [p.ts for p in added.route] == [at(20), at(25), at(30)]
 
 
 def test_add_indexes_by_position_and_is_idempotent():

@@ -172,6 +172,7 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .addnode{background:var(--cobalt-500)}
 #addBar{background:rgba(10,88,205,.1);border-bottom-color:rgba(10,88,205,.35)}
 #addHint{flex:1 1 auto}
-#addForm{display:flex;align-items:center;gap:6px}
+#addForm{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 #addForm input,#addForm select{font-family:var(--mono);font-size:12px;padding:2px 5px;
   border:1px solid var(--ink-300);border-radius:5px}
+#addPurpose{min-width:120px;max-width:180px}

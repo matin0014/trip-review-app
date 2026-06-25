@@ -31,12 +31,14 @@ def test_serialize_trip_basic_fields():
 def test_serialize_trip_falls_back_to_endpoints_without_route():
     d = serialize_trip(mk(1), seq=1)
     assert d["route"] == [[49.1, -123.1], [49.2, -123.2]]
+    assert d["r0_time"] is None and d["rN_time"] is None
 
 
 def test_serialize_trip_uses_route_when_present():
     route = [RoutePoint(49.15, -123.15, BASE)]
     d = serialize_trip(mk(1, route=route), seq=1)
     assert d["route"] == [[49.15, -123.15]]
+    assert d["r0_time"] == "09:00" and d["rN_time"] == "09:00"
 
 
 def test_serialize_pair_flag_maps_seqs_and_status():

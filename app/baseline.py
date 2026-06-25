@@ -9,6 +9,8 @@ only and holds no review state (that arrives later via the decision log).
 
 from __future__ import annotations
 
+from typing import Optional
+
 from engine.classify import group_person_days
 from engine.geo import haversine_m
 from engine.ids import with_ids
@@ -61,6 +63,8 @@ def serialize_trip(t, seq: int) -> dict:
         "disp_m": round(haversine_m(t.start_lat, t.start_lon, t.end_lat, t.end_lon), 1),
         "r0": [_r(pts[0].lat), _r(pts[0].lon)] if pts else None,
         "rN": [_r(pts[-1].lat), _r(pts[-1].lon)] if pts else None,
+        "r0_time": pts[0].ts.strftime("%H:%M") if pts else None,
+        "rN_time": pts[-1].ts.strftime("%H:%M") if pts else None,
         "npts": len(pts),
         "route": route,
     }
@@ -79,9 +83,10 @@ def serialize_flag(f, seq_of: dict, status: str = None) -> dict:
     return out
 
 
-def build_baseline(trips: list, flags: list, raw_name: str) -> dict:
+def build_baseline(trips: list, flags: list, raw_name: str, places_by_person: Optional[dict] = None) -> dict:
     """Assemble the proposals baseline keyed by ``"<person>|<date>"``."""
     flags = with_ids(flags)
+    places_by_person = places_by_person or {}
     by_row = {t.raw_row: t for t in trips}
     day_groups = group_person_days(trips)
 
@@ -100,6 +105,7 @@ def build_baseline(trips: list, flags: list, raw_name: str) -> dict:
             "person": person or "(unknown)", "date": str(date),
             "trips": [serialize_trip(t, seq) for seq, t in enumerate(day_trips, start=1)],
             "flags": [serialize_flag(f, seq_of) for f in flags_by_day.get((person, date), [])],
+            "places": places_by_person.get(person or "(unknown)", []),
         }
 
     return {

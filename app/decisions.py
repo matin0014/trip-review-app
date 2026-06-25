@@ -30,7 +30,8 @@ VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS | frozenset({"clear"})
 # Manual edit event types that participate in the undo/redo LIFO alongside
 # flag decisions. Unknown types are ignored (forward-compatibility).
 _MANUAL_TYPES = frozenset({
-    "manual_delete", "manual_merge", "manual_split", "manual_add", "manual_mode"
+    "manual_delete", "manual_merge", "manual_split", "manual_add", "manual_mode",
+    "manual_purpose",
 })
 
 
@@ -132,6 +133,7 @@ def _signature(trips: list) -> tuple:
     return tuple(sorted(
         (t.raw_row, t.start_ts, t.end_ts,
          round(t.start_lat, 6), round(t.start_lon, 6),
-         round(t.end_lat, 6), round(t.end_lon, 6))
+         round(t.end_lat, 6), round(t.end_lon, 6),
+         t.mode, t.purpose)
         for t in trips
     ))
