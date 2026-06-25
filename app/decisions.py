@@ -30,7 +30,8 @@ VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS | frozenset({"clear"})
 # Manual edit event types that participate in the undo/redo LIFO alongside
 # flag decisions. Unknown types are ignored (forward-compatibility).
 _MANUAL_TYPES = frozenset({
-    "manual_delete", "manual_merge", "manual_split", "manual_add"
+    "manual_delete", "manual_merge", "manual_split", "manual_add", "manual_mode",
+    "manual_purpose", "manual_time"
 })
 
 
@@ -128,10 +129,16 @@ def fixpoint(day_trips: list, accepted_ids: set, ops: list = None,
 
 
 def _signature(trips: list) -> tuple:
-    """An order-independent identity of a trip set, for convergence detection."""
+    """An order-independent identity of a trip set, for convergence detection.
+
+    Includes `mode`/`purpose` (not just geometry) so a label-only manual edit
+    (e.g. ``manual_mode``) registers as a change and is committed by the loop —
+    otherwise the geometry-identical projection looks converged and the relabel is
+    dropped before ``trips = projected`` runs."""
     return tuple(sorted(
         (t.raw_row, t.start_ts, t.end_ts,
          round(t.start_lat, 6), round(t.start_lon, 6),
-         round(t.end_lat, 6), round(t.end_lon, 6))
+         round(t.end_lat, 6), round(t.end_lon, 6),
+         t.mode, t.purpose)
         for t in trips
     ))

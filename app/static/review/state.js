@@ -10,11 +10,21 @@ export const layer = L.layerGroup().addTo(map);
 
 export const S = {
   byPerson: {},
+  people: {},              // accessCode -> {home,work,vehicles,city} (optional SD)
+  modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
   cur: {person:null, key:null, data:null},
   hidden: new Set(),       // seqs toggled off
   sel: null,               // selected trip seq (detail open)
+  modeOpen: false,         // is the selected trip's mode dropdown expanded
+  timeOpen: false,         // is the selected trip's start/end time editor open
+  purposeOpen: false,      // is the selected trip's purpose dropdown expanded
+  flagSel: null,           // expanded flag id (detail open)
+  selId: null,             // selected trip's raw_row (stable id, survives renumber)
+  followSel: true,         // keep the selection on its trip across an action
   resolvedOpen: false,     // is the Resolved group expanded
   mergeMode: false,        // are we in trip-merge selection mode?
   mergeSelected: new Set(),// raw_rows (t.id) chosen for merge
+  addMode: false,          // are we placing a new (manual_add) trip?
+  addPts: [],              // [[lat,lon], ...] clicked while adding (start, then end)
   render: null,            // (fit) => void — assigned by app.js
 };

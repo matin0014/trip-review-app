@@ -13,11 +13,78 @@ import os
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 
-from app import baseline, decisions, generate, session, state
+from app import baseline, decisions, generate, routing, session, state
 from engine.classify import classify_all
-from engine.loader import load_trips
+from engine.loader import load_socio, load_trips
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
+
+
+# Realistic typical speed range (low, high) km/h per travel mode: a fixed
+# yardstick the reviewer can judge a trip's label against, NOT an average measured
+# from this dataset. high == low for a single-value reference. Values follow
+# Canadian commute/transit references; car speed (urban..highway) is reused for
+# every motor-vehicle mode (auto driver/passenger, taxi, vehicle, etc.).
+_CAR = (30, 120)
+_REF_SPEED_KMH = {
+    "Walk": (5, 6), "Running": (10, 12),
+    "Bike": (15, 24), "Shared e-scooter": (15, 24),
+    "Bus": (20, 25), "Transit": (20, 25), "Transit Bus": (20, 25),
+    "SkyTrain": (30, 45), "SeaBus": (15, 15),
+    "Train": (54, 54),
+    "Auto Driver": _CAR, "Auto Passenger": _CAR, "Taxi": _CAR, "Vehicle": _CAR,
+    "Car Share": _CAR, "Motorcycle": _CAR,
+}
+
+
+def _fmt_ref(rng) -> "str | None":
+    if rng is None:
+        return None
+    lo, hi = rng
+    return f"~{lo} km/h" if lo == hi else f"~{lo} to {hi} km/h"
+
+
+def _mode_speeds(sid: str) -> list:
+    """Reference speed per travel mode PRESENT in the workbook.
+
+    `ref` is a realistic typical speed (or range) for the mode, a fixed lookup, not
+    an average of this dataset, giving the reviewer a sane yardstick for a trip's
+    label. Modes with no reference are listed with `ref = None`. Sorted fastest
+    first by the top of the range."""
+    modes = {t.mode for trips in state.all_days(sid).values() for t in trips}
+    rows = [{"mode": m, "rng": _REF_SPEED_KMH.get(m)} for m in modes]
+    rows.sort(key=lambda r: (r["rng"] is None, -(r["rng"][1] if r["rng"] else 0), r["mode"]))
+    return [{"mode": r["mode"], "ref": _fmt_ref(r["rng"])} for r in rows]
+
+
+def _live_pending_counts(sid: str) -> dict:
+    """Map each person-day key -> number of flags still PENDING in the live
+    projection (current engine + this session's decisions). This is what the day
+    dropdown's ⚠ badge shows, so it matches the open day and decrements as flags
+    are resolved, unlike the frozen baseline count, which can also be stale if the
+    session was built by an older engine."""
+    all_events = session.read_events(sid)
+    res = decisions.resolutions(all_events)
+    accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
+    ops_all = decisions.manual_ops(all_events)
+    resolved = decisions.APPLY_RESOLUTIONS | decisions.WAIVE_RESOLUTIONS
+
+    counts: dict = {}
+    for key, trips in state.all_days(sid).items():
+        ops = [op for op in ops_all if op.get("day_key") == key]
+        _, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
+        counts[key] = sum(1 for f in surfaced if res.get(f.flag_id) not in resolved)
+    return counts
+
+
+def _combine_dt(day_key: str, hms: str) -> str:
+    """Rebuild a naive ISO instant from a day_key's date and an ``HH:MM[:SS]``
+    time typed in the UI (the engine attaches the day's timezone)."""
+    date = day_key.split("|", 1)[1]
+    hms = str(hms).strip()
+    if hms.count(":") == 1:
+        hms = f"{hms}:00"
+    return f"{date}T{hms}"
 
 
 def create_app() -> Flask:
@@ -39,10 +106,12 @@ def create_app() -> Flask:
         try:
             trips = load_trips(path)
             flags = classify_all(trips)
+            people = load_socio(path)  # optional home/work/vehicles; {} if absent
         except Exception as exc:  # surface a bad workbook as a 400, not a 500
             abort(400, f"could not process workbook: {exc}")
 
         data = baseline.build_baseline(trips, flags, os.path.basename(path))
+        data["people"] = people
         session.write_proposals(sid, data)
         return redirect(url_for("review", sid=sid))
 
@@ -57,13 +126,16 @@ def create_app() -> Flask:
         if not session.exists(sid):
             abort(404)
         data = session.read_proposals(sid)
+        pending = _live_pending_counts(sid)
         days = [
             {"key": k, "person": v["person"], "date": v["date"],
-             "n_trips": len(v["trips"]), "n_flags": len(v["flags"])}
+             "n_trips": len(v["trips"]), "n_flags": pending.get(k, 0)}
             for k, v in data["days"].items()
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
-        return jsonify({"raw_name": data["raw_name"], "counts": data["counts"], "days": days})
+        return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
+                        "days": days, "mode_speeds": _mode_speeds(sid),
+                        "people": data.get("people", {})})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):
@@ -140,6 +212,30 @@ def create_app() -> Flask:
                                    "day_key": day_key})
         return _state(sid)
 
+    @app.post("/api/<sid>/manual_mode")
+    def api_manual_mode(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, mode, day_key = body.get("raw_row"), body.get("mode"), body.get("day_key")
+        if raw_row is None or not mode or not day_key:
+            abort(400, "require raw_row, mode and day_key")
+        session.append_event(sid, {"type": "manual_mode", "raw_row": int(raw_row),
+                                   "mode": str(mode), "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_purpose")
+    def api_manual_purpose(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, purpose, day_key = body.get("raw_row"), body.get("purpose"), body.get("day_key")
+        if raw_row is None or purpose is None or not day_key:
+            abort(400, "require raw_row, purpose and day_key")
+        session.append_event(sid, {"type": "manual_purpose", "raw_row": int(raw_row),
+                                   "purpose": str(purpose), "day_key": day_key})
+        return _state(sid)
+
     @app.post("/api/<sid>/manual_merge")
     def api_manual_merge(sid):
         if not session.exists(sid):
@@ -151,6 +247,71 @@ def create_app() -> Flask:
         session.append_event(sid, {"type": "manual_merge",
                                    "raw_rows": [int(r) for r in raw_rows],
                                    "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_split")
+    def api_manual_split(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        split_time = body.get("split_time")
+        if raw_row is None or not day_key or not split_time:
+            abort(400, "require raw_row, split_time and day_key")
+        session.append_event(sid, {
+            "type": "manual_split", "raw_row": int(raw_row),
+            "split_ts": _combine_dt(day_key, split_time),
+            "mode_a": body.get("mode_a"), "mode_b": body.get("mode_b"),
+            "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_add")
+    def api_manual_add(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key = body.get("day_key")
+        coords = ("start_lat", "start_lon", "end_lat", "end_lon")
+        times = ("start_time", "end_time")
+        if not day_key or any(body.get(k) is None for k in coords + times):
+            abort(400, "require day_key, start/end times and start/end coordinates")
+        start_ts = _combine_dt(day_key, body["start_time"])
+        end_ts = _combine_dt(day_key, body["end_time"])
+        if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
+            abort(400, "end time must be after start time")
+        s_lat, s_lon = float(body["start_lat"]), float(body["start_lon"])
+        e_lat, e_lon = float(body["end_lat"]), float(body["end_lon"])
+        mode = body.get("mode") or "Unknown"
+        # OSM shortest path between the two clicked points, computed once and stored
+        # in the op so the pure engine just materialises it (empty -> straight line).
+        route = routing.osrm_route(s_lat, s_lon, e_lat, e_lon, mode)
+        session.append_event(sid, {
+            "type": "manual_add",
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "mode": mode, "purpose": body.get("purpose", ""),
+            "start_lat": s_lat, "start_lon": s_lon,
+            "end_lat": e_lat, "end_lon": e_lon,
+            "route": route,
+            "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_time")
+    def api_manual_time(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key = body.get("raw_row"), body.get("day_key")
+        start_time, end_time = body.get("start_time"), body.get("end_time")
+        if raw_row is None or not day_key or not start_time or not end_time:
+            abort(400, "require raw_row, start_time, end_time and day_key")
+        start_ts = _combine_dt(day_key, start_time)
+        end_ts = _combine_dt(day_key, end_time)
+        if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
+            abort(400, "end time must be after start time")
+        session.append_event(sid, {
+            "type": "manual_time", "raw_row": int(raw_row),
+            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")
