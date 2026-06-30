@@ -71,6 +71,21 @@ def test_purpose_idempotent_and_last_wins():
     assert once[0].purpose == "School" and twice[0].purpose == "School"
 
 
+# --- time -----------------------------------------------------------------
+
+def test_time_relabels_trip_span_and_retimes_route():
+    trips = [routed(1, 0, 10)]
+    op = {"type": "manual_time", "raw_row": 1,
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(40).strftime("%Y-%m-%dT%H:%M:%S")}
+    out = apply_manual_ops(trips, [op])
+
+    assert out[0].start_ts == at(20)
+    assert out[0].end_ts == at(40)
+    assert out[0].route[0].ts == at(20)
+    assert out[0].route[-1].ts == at(40)
+
+
 # --- delete ---------------------------------------------------------------
 
 def test_delete_drops_the_row():

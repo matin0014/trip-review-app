@@ -10,7 +10,7 @@ import {S, map, layer} from './state.js';
 import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
         modeOptions, hmToMin, minToHm} from './constants.js';
 import {lyTrips, lyStraight, lyFlags, lyEnds, lyPlaces} from './dom.js';
-import {decide, manualDelete, manualSplit} from './api.js';
+import {decide, manualDelete, manualPurpose, manualSplit} from './api.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
 const _popup = L.popup({closeButton: false, autoPan: true, className: 'map-popup'});
@@ -22,6 +22,17 @@ let _popupKind = null; // 'flag' | 'trip' | 'split'
 
 function _esc(s) {
  return String(s || '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function _applyMorningCommute(f) {
+ const e = f.ev || {};
+ if(!e.start || !e.end){ alert('This commute suggestion is missing home/work coordinates.'); return; }
+ window.dispatchEvent(new CustomEvent('open-add-trip', {detail:{
+  points:[e.start, e.end],
+  startTime:e.start_time || '08:30',
+  mode:'Auto Driver',
+  purpose:'Work',
+ }}));
 }
 
 // Bind the data-action buttons of whatever is currently in the popup. Called on
@@ -42,6 +53,17 @@ function _onAction(btn) {
  const action = btn.dataset.action;
  if (action === 'close') { _popup.close(); return; }
  if (_popupKind === 'flag') {
+  if(_popupTarget.type === 'morning_commute' && btn.dataset.res !== 'waive' && btn.dataset.res !== 'clear'){
+   _applyMorningCommute(_popupTarget);
+   _popup.close();
+   return;
+  }
+  if((_popupTarget.type === 'purpose_work' || _popupTarget.type === 'purpose_home') &&
+     btn.dataset.res !== 'waive' && btn.dataset.res !== 'clear'){
+   manualPurpose(_popupTarget.trip_id, _popupTarget.purpose, S.cur.key);
+   _popup.close();
+   return;
+  }
   decide(_popupTarget.id, btn.dataset.res);
   _popup.close();
  } else if (_popupKind === 'trip') {
@@ -222,6 +244,21 @@ if(lyPlaces.checked && d.places){
   d.flags.forEach(f=>{
    if(f.status!=='pending') return;
    const col = FC[f.type]||'#000', sq = f.seqs.filter(x=>x!=null); let mid;
+   if(f.type==='morning_commute'){
+    const e = f.ev || {};
+    if(!e.start || !e.end) return;
+    if(!bnds.contains(e.start) && !bnds.contains(e.end)) return;
+    L.polyline([e.start,e.end], {color:col, weight:3, dashArray:'8,6', interactive:false}).addTo(layer);
+    const fhit = L.polyline([e.start,e.end], {color:col, weight:18, opacity:0.001}).addTo(layer);
+    mid = [(e.start[0]+e.end[0])/2, (e.start[1]+e.end[1])/2];
+    fhit.on('click', ev=>{L.DomEvent.stopPropagation(ev); showFlagPopup(f, mid);});
+   }else
+   if(f.type==='purpose_work' || f.type==='purpose_home'){
+    const t = byseq[sq[0]]; if(!t || S.hidden.has(t.seq) || !bnds.contains(t.e)) return;
+    const cm = L.circleMarker(t.e, {radius:12, color:col, weight:3, dashArray:'4', fill:false}).addTo(layer);
+    cm.on('click', e=>{L.DomEvent.stopPropagation(e); showFlagPopup(f, t.e);});
+    mid=t.e;
+   }else
    if(f.type==='zero_move'){
     const t = byseq[sq[0]]; if(!t || S.hidden.has(t.seq) || !bnds.contains(t.s)) return;
     // Circle marker is inherently a reasonable click target; keep interactive.

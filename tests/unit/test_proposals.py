@@ -32,7 +32,9 @@ def test_fragment_merges_pair_into_one_trip() -> None:
     assert m.raw_row == 1                      # group root = lowest row
     assert m.start_ts == trips[0].start_ts     # A's start
     assert m.end_ts == trips[1].end_ts         # B's end
-    assert len(m.route) == 2                    # routes concatenated
+    assert len(m.route) == 3                    # routes plus A endpoint stitch
+    assert (m.route[1].lat, m.route[1].lon, m.route[1].ts) == (
+        trips[0].end_lat, trips[0].end_lon, trips[0].end_ts)
 
 
 def test_fragments_merge_transitively() -> None:

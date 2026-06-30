@@ -6,12 +6,15 @@ import {personSel, daySel, rFrom, rTo} from './dom.js';
 import {weekday} from './constants.js';
 
 const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
+ ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 export function loadDays(){
  fetch(`/api/${SID}/days`).then(r=>r.json()).then(d=>{
   const c = d.counts;
   $('dataset').textContent = `${d.raw_name}`;
   $('summary').textContent = `${c.trips} trips · ${c.flags} flags\n${c.persons} people · ${c.person_days} person-days`;
+  S.personInfo = d.participant_info || {};
   S.modeSpeeds = d.mode_speeds || [];
   S.purposeOptions = d.purpose_options || [];
   $('modespeeds').innerHTML = S.modeSpeeds.map(m=>
@@ -32,9 +35,18 @@ const dayOptLabel = x => `${x.date} · ${weekday(x.date)}`+(x.n_flags?`  ⚠${x.
 
 export function fillDays(){
  daySel.innerHTML = '';
+ renderPersonInfo();
  S.byPerson[S.cur.person].slice().sort((a,b)=>a.date<b.date?-1:1).forEach(x=>
    daySel.add(new Option(dayOptLabel(x), x.key)));
  S.cur.key = daySel.value; loadDay();
+}
+
+function renderPersonInfo(){
+ const rows = S.personInfo[S.cur.person] || [];
+ $('personInfo').innerHTML = rows.length ? rows.map(r=>
+   `<div class="pirow"><span class="pik">${esc(r.label)}</span>`+
+   `<span class="piv">${esc(r.value || 'n/a')}</span></div>`).join('')
+   : '<div class="empty" style="padding:0">No participant info.</div>';
 }
 
 // keep=true preserves the current show/hide + selection across a decision
@@ -81,6 +93,10 @@ export function manualMode(rawRow, mode, dayKey){
 export function manualPurpose(rawRow, purpose, dayKey){
  fetch(`/api/${SID}/manual_purpose`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_row:rawRow, purpose, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+export function manualTime(rawRow, startTime, endTime, dayKey){
+ fetch(`/api/${SID}/manual_time`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, start_time:startTime, end_time:endTime, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 export function manualMerge(rawRows, dayKey){
  S.selId = Math.min(...rawRows);   // select the merged result (its raw_row = min)

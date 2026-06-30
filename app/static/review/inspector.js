@@ -5,7 +5,7 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         MODES, tcol, flagSummary, flagRows, fmtDist} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose} from './api.js';
+import {decide, manualMode, manualPurpose, manualTime} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -13,6 +13,25 @@ const _ll = p => p ? p[0]+', '+p[1] : 'n/a';
 const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function applyMorningCommute(f){
+ const e = f.ev || {};
+ if(!e.start || !e.end){
+  alert('This commute suggestion is missing home/work coordinates.');
+  return;
+ }
+ window.dispatchEvent(new CustomEvent('open-add-trip', {detail:{
+  points: [e.start, e.end],
+  startTime: e.start_time || '08:30',
+  mode: 'Auto Driver',
+  purpose: 'Work',
+ }}));
+}
+
+function applyPurposeSuggestion(f){
+ if(f.trip_id == null || !f.purpose) return;
+ manualPurpose(f.trip_id, f.purpose, S.cur.key);
+}
 
 // The Mode row is interactive: an arrow toggles a list of the workbook's modes
 // (with their average speeds) so the reviewer can relabel this trip's mode.
@@ -41,9 +60,15 @@ function purposeRowHTML(t){
    `<span class="v purpose-cur">${t.purpose?esc(t.purpose):'n/a'} <span class="mode-arrow">${open?'v':'>'}</span></span></div>`+list;
 }
 
+function timeRowHTML(t){
+ return `<div class="drow time-edit"><span class="k">Time</span>`+
+  `<span class="v"><input class="time-start" type="time" value="${esc(t.start)}"> - `+
+  `<input class="time-end" type="time" value="${esc(t.end)}"></span></div>`;
+}
+
 function detailHTML(t){
  return `<div class="detail">`+
-  _row('Start',t.start)+_row('End',t.end)+_row('Duration',t.dur+' min')+
+  timeRowHTML(t)+_row('Duration',t.dur+' min')+
   modeRowHTML(t)+
   purposeRowHTML(t)+
   _row('Speed', t.speed!=null?t.speed+' km/h':'n/a')+
@@ -124,6 +149,17 @@ export function renderTrips(){
      const p = el.dataset.purpose || ''; S.purposeOpen=false;
      if(p!==(t.purpose||'')) manualPurpose(t.id, p, S.cur.key); else S.render();
     });
+    const st = card.querySelector('.time-start'), et = card.querySelector('.time-end');
+    const commitTime = e=>{
+     e.stopPropagation();
+     if(!st.value || !et.value) return;
+     if(et.value <= st.value){ alert('End time must be after the start time.'); return; }
+     if(st.value !== t.start || et.value !== t.end) manualTime(t.id, st.value, et.value, S.cur.key);
+    };
+    if(st && et){
+     st.onclick = e=>e.stopPropagation(); et.onclick = e=>e.stopPropagation();
+     st.onchange = commitTime; et.onchange = commitTime;
+    }
    }
   }
   tripsEl.appendChild(card);
@@ -163,10 +199,18 @@ export function flagCard(f){
  card.querySelector('.apply').onclick = ()=>{
   // Anchor selection to the trip that survives the merge (lowest raw_row of the
   // members) so the view stays put on what the user just acted on.
-  if(!acc){
+ if(!acc){
    const ids = f.seqs.filter(x=>x!=null)
      .map(s=>(S.cur.data.trips.find(t=>t.seq===s)||{}).id).filter(x=>x!=null);
    if(ids.length) S.selId = Math.min(...ids);
+  }
+  if(f.type === 'morning_commute'){
+   applyMorningCommute(f);
+   return;
+  }
+  if(f.type === 'purpose_work' || f.type === 'purpose_home'){
+   applyPurposeSuggestion(f);
+   return;
   }
   decide(f.id, acc?'clear':applyRes);
  };

@@ -5,7 +5,7 @@ import {S, map} from './state.js';
 import {drawMap} from './mapview.js';
 import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
-import {MODES} from './constants.js';
+import {COMMUTE_SPEEDS, MODES, hmToMin, minToHm} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyPlaces, lyFollow, rFrom, rTo} from './dom.js';
 
 const $ = id => document.getElementById(id);
@@ -13,12 +13,42 @@ const $ = id => document.getElementById(id);
 function fillSelect(el, values, selected='', blankLabel=null){
  el.innerHTML = '';
  if(blankLabel !== null) el.add(new Option(blankLabel, ''));
- [...new Set(values.filter(Boolean))].forEach(v=>el.add(new Option(v, v)));
+ [...new Set([selected, ...values].filter(Boolean))].forEach(v=>el.add(new Option(v, v)));
  el.value = selected;
 }
 
 function addModeValues(){
- return [...new Set([...S.modeSpeeds.map(m=>m.mode), ...MODES])];
+ return [...new Set([...S.modeSpeeds.map(m=>m.mode), ...MODES, ...Object.keys(COMMUTE_SPEEDS)])];
+}
+
+function commuteMode(raw){
+ const s = String(raw || '').trim().toLowerCase();
+ const aliases = {'bus':'Transit Bus', 'run':'Running', 'vehicle':'Vehicle (generic)',
+  'transit':'Transit (generic)', 'ferry':'SeaBus'};
+ if(aliases[s]) return aliases[s];
+ return Object.keys(COMMUTE_SPEEDS).find(m=>m.toLowerCase()===s) || raw;
+}
+
+function haversineM(a, b){
+ const R=6371008.8, rad=x=>x*Math.PI/180;
+ const p1=rad(a[0]), p2=rad(b[0]), dp=rad(b[0]-a[0]), dl=rad(b[1]-a[1]);
+ const h=Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+ return 2*R*Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function calculatedAddEnd(){
+ const st=$('addStartTime').value;
+ if(S.addPts.length<2 || !st) return '';
+ const mode = commuteMode($('addMode').value);
+ const speed = COMMUTE_SPEEDS[mode];
+ if(!speed) return '';
+ const minutes = (haversineM(S.addPts[0], S.addPts[1]) / 1000) / speed * 60;
+ return minToHm(hmToMin(st) + minutes);
+}
+
+function updateAddEndPreview(){
+ const et = calculatedAddEnd();
+ $('addEndPreview').textContent = et ? `ends ${et}` : 'end from mode';
 }
 
 function routeProfile(mode){
@@ -60,6 +90,7 @@ function updateAddBar(){
  $('addHint').textContent = ready ? 'Set times & mode for the new trip'
    : (n===0 ? 'Click the trip start on the map' : 'Click the trip end on the map');
  $('addForm').style.display = ready ? '' : 'none';
+ updateAddEndPreview();
 }
 function addPoint(ll){
  if(S.addPts.length>=2) return;          // two points already placed; finish in the form
@@ -73,22 +104,37 @@ $('bAdd').onclick = ()=>{
  S.addMode=true; S.addPts=[];
  fillSelect($('addMode'), addModeValues(), 'Walk');
  fillSelect($('addPurpose'), S.purposeOptions, '', '(no purpose)');
- $('addStartTime').value=''; $('addEndTime').value='';
+ $('addStartTime').value='';
+ updateAddEndPreview();
  $('addBar').style.display=''; updateAddBar(); S.render(false);
 };
+
+window.addEventListener('open-add-trip', e=>{
+ const d = e.detail || {};
+ S.mergeMode=false; S.mergeSelected=new Set();
+ S.addMode=true; S.addPts=(d.points || []).slice(0, 2);
+ fillSelect($('addMode'), addModeValues(), d.mode || 'Auto Driver');
+ fillSelect($('addPurpose'), S.purposeOptions, d.purpose || '', '(no purpose)');
+ $('addStartTime').value=d.startTime || '';
+ $('addBar').style.display='';
+ updateAddBar();
+ S.render(false);
+});
 $('bAddCancel').onclick = exitAdd;
 $('bAddCommit').onclick = async ()=>{
- const st=$('addStartTime').value, et=$('addEndTime').value;
- if(S.addPts.length<2 || !st || !et){alert('Place start & end points and set both times.'); return;}
+ const st=$('addStartTime').value, et=calculatedAddEnd();
+ if(S.addPts.length<2 || !st || !et){alert('Place start & end points, set start time, and choose a mode with a speed.'); return;}
  if(et<=st){alert('End time must be after the start time.'); return;}  // HH:MM is zero-padded, so string compare is chronological
  const [s,en]=S.addPts;
- const mode = $('addMode').value;
+ const mode = commuteMode($('addMode').value);
  const route = await networkRoute(s, en, mode);
  manualAdd({day_key:S.cur.key, start_time:st, end_time:et, mode,
    purpose:$('addPurpose').value, route,
    start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
  exitAdd();
 };
+$('addStartTime').onchange = updateAddEndPreview;
+$('addMode').onchange = updateAddEndPreview;
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};

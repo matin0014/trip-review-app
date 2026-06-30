@@ -128,6 +128,9 @@ def apply_manual_ops(trips: list, ops: list) -> list:
         elif kind == "manual_purpose":
             row, purpose = op["raw_row"], op.get("purpose", "")
             trips = [replace(t, purpose=purpose) if t.raw_row == row else t for t in trips]
+        elif kind == "manual_time":
+            row = op["raw_row"]
+            trips = [_apply_time(t, op) if t.raw_row == row else t for t in trips]
     return trips
 
 
@@ -206,6 +209,23 @@ def _apply_add(trips: list, op: dict, n: int) -> list:
     )
     trip.route = _manual_route(op.get("route"), trip)
     return sorted(trips + [trip], key=lambda t: (str(t.person), t.start_ts))
+
+
+def _apply_time(trip: Trip, op: dict) -> Trip:
+    start_ts = _split_datetime(op["start_ts"], trip.start_ts.tzinfo)
+    end_ts = _split_datetime(op["end_ts"], trip.end_ts.tzinfo)
+    if end_ts <= start_ts:
+        return trip
+    return replace(trip, start_ts=start_ts, end_ts=end_ts,
+                   route=_retime_route(trip.route, start_ts, end_ts))
+
+
+def _retime_route(route: list[RoutePoint], start_ts: datetime, end_ts: datetime) -> list[RoutePoint]:
+    if len(route) < 2:
+        return route
+    span = end_ts - start_ts
+    step = span / (len(route) - 1)
+    return [RoutePoint(p.lat, p.lon, start_ts + step * i) for i, p in enumerate(route)]
 
 
 def _manual_route(route: object, trip: Trip) -> list[RoutePoint]:
@@ -318,7 +338,11 @@ def _merge_group(group: list) -> Trip:
     routes in timestamp order; destination piece keeps mode/purpose."""
     g = sorted(group, key=lambda t: t.start_ts)
     first, last = g[0], g[-1]
-    route = sorted((p for t in g for p in t.route), key=lambda p: p.ts)
+    route: list[RoutePoint] = []
+    for i, t in enumerate(g):
+        route.extend(sorted((_route_point_in_trip_tz(p, t) for p in t.route), key=lambda p: p.ts))
+        if i < len(g) - 1:
+            route.append(RoutePoint(t.end_lat, t.end_lon, t.end_ts))
     return Trip(
         raw_row=min(t.raw_row for t in g),
         person=first.person,
@@ -332,6 +356,13 @@ def _merge_group(group: list) -> Trip:
         end_lon=last.end_lon,
         route=route,
     )
+
+
+def _route_point_in_trip_tz(point: RoutePoint, trip: Trip) -> RoutePoint:
+    """Return a point whose timestamp awareness matches its owning trip."""
+    if (point.ts.tzinfo is None) == (trip.start_ts.tzinfo is None):
+        return point
+    return RoutePoint(point.lat, point.lon, point.ts.replace(tzinfo=trip.start_ts.tzinfo))
 
 
 def _make_stub(a: Trip, b: Trip, row: int) -> Trip:

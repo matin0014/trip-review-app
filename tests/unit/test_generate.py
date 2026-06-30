@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.generate import _extra_ids, clean_day
+import pandas as pd
+
+from app.generate import _extra_ids, _route_cell, build_cleaned_df, build_dofile_df, clean_day
 from engine.classify import classify_day
 from engine.geo import EARTH_RADIUS_M
 from engine.ids import with_ids
 from engine.models import RoutePoint, Trip
+from engine.proposals import add_row
 
 PST = timezone(timedelta(hours=-8))
 BASE = datetime(2024, 11, 5, 12, 0, 0, tzinfo=PST)
@@ -26,6 +29,39 @@ def leg(raw, v, smin, emin, slon_m, elon_m, route=None):
                 start_ts=BASE + timedelta(minutes=smin), end_ts=BASE + timedelta(minutes=emin),
                 start_lat=0.0, start_lon=dlon(slon_m), end_lat=0.0, end_lon=dlon(elon_m),
                 route=route if route is not None else route_for_speed(v))
+
+
+def write_xlsx(tmp_path, trips):
+    path = tmp_path / "raw.xlsx"
+    pd.DataFrame([{
+        "accessCode": t.person,
+        "start_weekday": t.start_ts.strftime("%A"),
+        "start_date": t.start_ts.strftime("%Y-%m-%d"),
+        "start_time": t.start_ts.strftime("%H:%M:%S"),
+        "end_weekday": t.end_ts.strftime("%A"),
+        "end_date": t.end_ts.strftime("%Y-%m-%d"),
+        "end_time": t.end_ts.strftime("%H:%M:%S"),
+        "mode_of_travel": t.mode,
+        "purpose_of_travel": t.purpose,
+        "start_latitude": t.start_lat,
+        "start_longitude": t.start_lon,
+        "end_latitude": t.end_lat,
+        "end_longitude": t.end_lon,
+        "time_duration": "9:59:59",
+        "region": "Metro Vancouver | Fraser Valley",
+        "city": "Vancouver",
+        "workAddress": "123 Work St",
+        "schoolAddress": "456 School Ave",
+        "age": "30 | 31",
+        "home_latitude": 49.11,
+        "home_longitude": -123.11,
+        "work_latitude": 49.22,
+        "work_longitude": -123.22,
+        "school_latitude": 49.33,
+        "school_longitude": -123.33,
+        "routes": _route_cell(t),
+    } for t in trips]).to_excel(path, index=False)
+    return path
 
 
 def fid(trips, ftype):
@@ -76,6 +112,30 @@ def test_accept_fragment_shares_merge_id():
     trips = conflict_day()
     rows, stubs, *_ = clean_day(trips, {fid(trips, "fragment")})
     assert rows == [(1, "M1"), (2, "M1")] and stubs == []
+
+
+def test_cleaned_df_collapses_merge_to_one_overwritten_row(tmp_path):
+    r1 = [RoutePoint(0.0, 0.0, BASE), RoutePoint(0.0, 0.1, BASE + timedelta(minutes=10))]
+    r2 = [RoutePoint(0.0, 0.2, BASE + timedelta(minutes=12)),
+          RoutePoint(0.0, 0.25, BASE + timedelta(minutes=17))]
+    trips = [
+        leg(1, 5, 0, 10, 0.0, 300.0, route=r1),
+        leg(2, 5, 12, 17, 1000.0, 1050.0, route=r2),
+    ]
+    path = write_xlsx(tmp_path, trips)
+
+    df = build_cleaned_df(str(path), {fid(trips, "fragment")})
+
+    assert list(df["trip_id"]) == ["M1"]
+    row = df.iloc[0]
+    assert row["start_time"] == "12:00:00"
+    assert row["end_time"] == "12:17:00"
+    assert row["time_duration"] == "0:17:00"
+    assert row["start_longitude"] == trips[0].start_lon
+    assert row["end_longitude"] == trips[1].end_lon
+    assert row["region"] == "Metro Vancouver"
+    assert row["age"] == "30"
+    assert str(round(trips[0].end_lon, 7)) in row["routes"]  # prior endpoint stitched in
 
 
 def test_accept_zero_move_drops_the_row():
@@ -144,6 +204,81 @@ def test_manual_add_is_an_a_extra():
     assert rows == [(1, "1")]                      # untouched original
     assert len(extras) == 1 and extras[0][0] == "add"
     assert extras[0][2].mode == "Bus"
+
+
+def test_cleaned_df_merges_manual_add_with_existing_trip(tmp_path):
+    trips = [leg(1, 30, 0, 5, 0.0, 100.0)]
+    path = write_xlsx(tmp_path, trips)
+    ops = [
+        {"type": "manual_add", "day_key": "p|2024-11-05",
+         "start_ts": "2024-11-05T12:07:00", "end_ts": "2024-11-05T12:15:00",
+         "mode": "Bus", "purpose": "Work",
+         "start_lat": 0.0, "start_lon": 0.01, "end_lat": 0.0, "end_lon": 0.02,
+         "route": [[0.0, 0.01], [0.0, 0.02]]},
+        {"type": "manual_merge", "day_key": "p|2024-11-05",
+         "raw_rows": [1, add_row(1)]},
+    ]
+
+    df = build_cleaned_df(str(path), set(), all_ops=ops)
+
+    assert list(df["trip_id"]) == ["M1"]
+    row = df.iloc[0]
+    assert row["start_time"] == "12:00:00"
+    assert row["end_time"] == "12:15:00"
+    assert row["time_duration"] == "0:15:00"
+    assert row["start_longitude"] == trips[0].start_lon
+    assert row["end_longitude"] == 0.02
+    assert row["mode_of_travel"] == "Bus"
+
+
+def test_cleaned_df_manual_add_inherits_source_columns_and_weekdays(tmp_path):
+    trips = [leg(1, 30, 0, 5, 0.0, 100.0)]
+    path = write_xlsx(tmp_path, trips)
+    ops = [{
+        "type": "manual_add", "day_key": "p|2024-11-05",
+        "start_ts": "2024-11-05T13:00:00", "end_ts": "2024-11-05T13:12:00",
+        "mode": "Walk", "purpose": "Work",
+        "start_lat": 0.0, "start_lon": 0.01, "end_lat": 0.0, "end_lon": 0.02,
+        "route": [[0.0, 0.01], [0.0, 0.02]],
+    }]
+
+    df = build_cleaned_df(str(path), set(), all_ops=ops)
+    added = df[df["trip_id"] == "A01"].iloc[0]
+
+    assert added["start_weekday"] == "Tuesday"
+    assert added["end_weekday"] == "Tuesday"
+    assert added["region"] == "Metro Vancouver"
+    assert added["city"] == "Vancouver"
+    assert added["workAddress"] == "123 Work St"
+    assert added["schoolAddress"] == "456 School Ave"
+    assert added["home_latitude"] == 49.11
+    assert added["work_longitude"] == -123.22
+
+
+def test_dofile_keeps_manual_add_row_when_merged_with_existing_trip(tmp_path):
+    trips = [leg(1, 30, 0, 5, 0.0, 100.0)]
+    path = write_xlsx(tmp_path, trips)
+    ops = [
+        {"type": "manual_add", "day_key": "p|2024-11-05",
+         "start_ts": "2024-11-05T12:07:00", "end_ts": "2024-11-05T12:15:00",
+         "mode": "Bus", "purpose": "Work",
+         "start_lat": 0.0, "start_lon": 0.01, "end_lat": 0.0, "end_lon": 0.02,
+         "route": [[0.0, 0.01], [0.0, 0.02]]},
+        {"type": "manual_merge", "day_key": "p|2024-11-05",
+         "raw_rows": [1, add_row(1)]},
+    ]
+
+    df = build_dofile_df(str(path), set(), {}, all_ops=ops)
+
+    assert list(df["trip_id"]) == ["M1", "A01"]
+    added = df.iloc[1]
+    assert added["start_time"] == "12:07:00"
+    assert added["end_time"] == "12:15:00"
+    assert added["time_duration"] == "0:08:00"
+    assert added["start_longitude"] == 0.01
+    assert added["end_longitude"] == 0.02
+    assert added["routes"] != "[]"
+    assert added["flags"] == "manual_add:merged"
 
 
 def test_extra_ids_labels_split_b():

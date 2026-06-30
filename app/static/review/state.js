@@ -10,6 +10,7 @@ export const layer = L.layerGroup().addTo(map);
 
 export const S = {
   byPerson: {},
+  personInfo: {},          // {accessCode: [{label, value}, ...]}
   modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
   purposeOptions: [],      // workbook purpose_of_travel values for manual adds
   cur: {person:null, key:null, data:null},

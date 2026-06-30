@@ -22,6 +22,8 @@
   <aside class="rail">
    <div class="overline">Participant <span class="aux" id="pcount"></span></div>
    <select id="person"></select>
+   <div class="overline">Participant info</div>
+   <div class="personinfo" id="personInfo"></div>
    <div class="overline">Date</div>
    <select id="day"></select>
    <div class="overline">Layers</div>
@@ -60,7 +62,8 @@
    <div id="addBar" class="merge-bar" style="display:none">
     <span id="addHint">Click the trip start on the map</span>
     <span id="addForm" style="display:none">
-     <input id="addStartTime" type="time"> – <input id="addEndTime" type="time">
+     <input id="addStartTime" type="time">
+     <span id="addEndPreview" class="mono"></span>
      <select id="addMode"></select>
      <select id="addPurpose"></select>
      <button id="bAddCommit" class="act apply">Add</button>

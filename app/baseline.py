@@ -83,10 +83,13 @@ def serialize_flag(f, seq_of: dict, status: str = None) -> dict:
     return out
 
 
-def build_baseline(trips: list, flags: list, raw_name: str, places_by_person: Optional[dict] = None) -> dict:
+def build_baseline(trips: list, flags: list, raw_name: str,
+                   places_by_person: Optional[dict] = None,
+                   participant_info_by_person: Optional[dict] = None) -> dict:
     """Assemble the proposals baseline keyed by ``"<person>|<date>"``."""
     flags = with_ids(flags)
     places_by_person = places_by_person or {}
+    participant_info_by_person = participant_info_by_person or {}
     by_row = {t.raw_row: t for t in trips}
     day_groups = group_person_days(trips)
 
@@ -114,5 +117,6 @@ def build_baseline(trips: list, flags: list, raw_name: str, places_by_person: Op
             "trips": len(trips), "flags": len(flags),
             "persons": len({t.person for t in trips}), "person_days": len(days),
         },
+        "participant_info": participant_info_by_person,
         "days": days,
     }

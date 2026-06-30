@@ -30,7 +30,27 @@ from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
 from engine.params import DEFAULT
-from engine.proposals import _make_stub, split_b_row
+from engine.proposals import _apply_add, _make_stub, add_row, split_b_row
+
+PIPE_FIRST_COLUMNS = {
+    "region", "_returnRespondent", "streetAddress", "city", "postalCode",
+    "totalPeople", "homeType", "ownerStatus", "grossIncome",
+    "numberOfVehicles", "streetAddressCoordinate", "age", "gender",
+    "maritalStatus", "hasLicense", "hasTransitPass", "educationLevel",
+    "employmentStatus", "occupationCategory", "workArrangement", "workMode",
+    "personalIncome", "workAddress", "schoolAddress",
+}
+
+ADDED_ROW_INHERIT_COLUMNS = {
+    "region", "_returnRespondent", "streetAddress", "city", "postalCode",
+    "totalPeople", "homeType", "ownerStatus", "grossIncome",
+    "numberOfVehicles", "streetAddressCoordinate", "age", "gender",
+    "maritalStatus", "hasLicense", "hasTransitPass", "educationLevel",
+    "employmentStatus", "occupationCategory", "workArrangement", "workMode",
+    "personalIncome", "workAddress", "schoolAddress",
+    "home_latitude", "home_longitude", "work_latitude", "work_longitude",
+    "school_latitude", "school_longitude",
+}
 
 
 def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
@@ -106,6 +126,17 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     # Manual mode changes -> overwrite mode_of_travel in the cleaned file. When the
     # target row is part of a merge, every member of that group gets the new mode so
     # the shared M-row reads consistently (option b).
+    canonical_group_members: dict = defaultdict(list)
+    for m, root in merged_root.items():
+        canonical_group_members[root].append(m)
+
+    export_root: dict = {}
+    for root, members in canonical_group_members.items():
+        positives = [m for m in members if m > 0]
+        export_root[root] = min(positives) if positives else root
+    for m, root in list(merged_root.items()):
+        merged_root[m] = export_root.get(root, root)
+
     group_members: dict = defaultdict(list)
     for m, root in merged_root.items():
         group_members[root].append(m)
@@ -117,6 +148,22 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
                 mode_overrides[tgt] = op["mode"]
 
     live_by_row = {t.raw_row: t for t in live}
+    manual_added_by_row: dict = {}
+    add_n = 0
+    for op in day_ops:
+        if op.get("type") != "manual_add":
+            continue
+        add_n += 1
+        row = add_row(add_n)
+        added = [t for t in _apply_add(day_trips, op, add_n) if t.raw_row == row]
+        if added:
+            manual_added_by_row[row] = added[0]
+    merge_overrides: dict = {}
+    for root, members in canonical_group_members.items():
+        out_root = export_root.get(root, root)
+        merged = live_by_row.get(root) or live_by_row.get(out_root)
+        if merged is not None and out_root > 0:
+            merge_overrides[out_root] = merged
     purpose_overrides: dict = {}
     for op in day_ops:
         if op.get("type") == "manual_purpose":
@@ -141,12 +188,21 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             rows.append((t.raw_row, project_trip_id("merge", group=merged_root[t.raw_row])))
         else:
             rows.append((t.raw_row, project_trip_id("keep", raw_row=t.raw_row)))
+            if any(op.get("type") == "manual_time" and op.get("raw_row") == t.raw_row for op in day_ops):
+                edited = live_by_row.get(t.raw_row)
+                if edited is not None:
+                    overrides[t.raw_row] = edited
 
     # Synthesized rows from `live` (negative raw_row): a split B-piece, else an add
     # (an accepted missing_trip stub or a manual add — both materialise as A-rows).
+    # A manual add merged into a positive source row is dofile-only: cleaned.xlsx
+    # stays collapsed, while dofile.xlsx keeps the added row's geometry.
     extras = []
     for t in live:
         if t.raw_row >= 0:
+            continue
+        if t.raw_row in export_root and export_root[t.raw_row] > 0:
+            extras.append(("merged_add", None, manual_added_by_row.get(t.raw_row, t)))
             continue
         if t.raw_row in split_b_of:
             extras.append(("split", split_b_of[t.raw_row], t))
@@ -158,6 +214,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
+    overrides.update(merge_overrides)
     return rows, extras, surfaced, overrides, purpose_overrides, mode_overrides
 
 
@@ -176,8 +233,10 @@ def _stub_row(stub) -> dict:
     """Map a stub `Trip` onto the raw column names (others left blank)."""
     return {
         "accessCode": stub.person,
+        "start_weekday": stub.start_ts.strftime("%A"),
         "start_date": stub.start_ts.strftime("%Y-%m-%d"),
         "start_time": stub.start_ts.strftime("%H:%M:%S"),
+        "end_weekday": stub.end_ts.strftime("%A"),
         "end_date": stub.end_ts.strftime("%Y-%m-%d"),
         "end_time": stub.end_ts.strftime("%H:%M:%S"),
         "mode_of_travel": stub.mode,
@@ -185,7 +244,12 @@ def _stub_row(stub) -> dict:
         "start_latitude": stub.start_lat, "start_longitude": stub.start_lon,
         "end_latitude": stub.end_lat, "end_longitude": stub.end_lon,
         "routes": _route_cell(stub),
+        "time_duration": _duration_cell(stub),
     }
+
+
+def _duration_cell(trip) -> str:
+    return str(trip.end_ts - trip.start_ts)
 
 
 def _route_cell(trip) -> str:
@@ -197,25 +261,96 @@ def _route_cell(trip) -> str:
     ])
 
 
-def _apply_split_a_overrides(df, overrides: dict) -> None:
-    """Overwrite each kept split-origin row to describe the truncated A piece
-    (its end time / endpoint / mode / purpose) instead of the full original trip,
-    so the ``S<n>-A`` and ``S<n>-B`` rows do not double-count the span. raw_row =
-    df position + 1; missing columns are skipped. The original `routes` cell is
-    left intact (the A breadcrumbs are a subset of it)."""
-    for raw_row, a in overrides.items():
+def _apply_trip_overrides(df, overrides: dict) -> None:
+    """Overwrite source rows with their projected live trip geometry.
+
+    Used for split A-pieces and merged clean rows. raw_row = df position + 1;
+    missing columns are skipped.
+    """
+    for raw_row, trip in overrides.items():
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
         vals = {
-            "end_date": a.end_ts.strftime("%Y-%m-%d"),
-            "end_time": a.end_ts.strftime("%H:%M:%S"),
-            "end_latitude": a.end_lat, "end_longitude": a.end_lon,
-            "mode_of_travel": a.mode, "purpose_of_travel": a.purpose,
+            "start_date": trip.start_ts.strftime("%Y-%m-%d"),
+            "start_weekday": trip.start_ts.strftime("%A"),
+            "start_time": trip.start_ts.strftime("%H:%M:%S"),
+            "end_date": trip.end_ts.strftime("%Y-%m-%d"),
+            "end_weekday": trip.end_ts.strftime("%A"),
+            "end_time": trip.end_ts.strftime("%H:%M:%S"),
+            "start_latitude": trip.start_lat, "start_longitude": trip.start_lon,
+            "end_latitude": trip.end_lat, "end_longitude": trip.end_lon,
+            "mode_of_travel": trip.mode, "purpose_of_travel": trip.purpose,
+            "time_duration": _duration_cell(trip),
+            "routes": _route_cell(trip),
         }
         for col, v in vals.items():
             if col in df.columns:
+                if isinstance(v, str) and df[col].dtype != object:
+                    df[col] = df[col].astype("object")
                 df.at[i, col] = v
+
+
+def _drop_collapsed_merge_members(df):
+    """Keep one physical row per M-trip in cleaned.xlsx."""
+    if "trip_id" not in df.columns:
+        return df
+    seen: set = set()
+    keep = []
+    for trip_id in df["trip_id"]:
+        if isinstance(trip_id, str) and trip_id.startswith("M"):
+            keep.append(trip_id not in seen)
+            seen.add(trip_id)
+        else:
+            keep.append(True)
+    return df[keep].copy()
+
+
+def _normalize_pipe_first_columns(df) -> None:
+    for col in PIPE_FIRST_COLUMNS:
+        if col not in df.columns:
+            continue
+        df[col] = df[col].map(_first_pipe_value)
+
+
+def _first_pipe_value(value):
+    try:
+        import pandas as pd
+        if bool(pd.isna(value)):
+            return value
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(value, str) or "|" not in value:
+        return value
+    return value.split("|", 1)[0].strip()
+
+
+def _row_templates(df) -> dict:
+    templates = {}
+    if "accessCode" not in df.columns:
+        return templates
+    for _, src in df.iterrows():
+        person = src.get("accessCode")
+        if person in templates:
+            continue
+        templates[person] = {
+            col: _first_pipe_value(src[col])
+            for col in ADDED_ROW_INHERIT_COLUMNS
+            if col in df.columns
+        }
+    return templates
+
+
+def _extra_base_row(templates: dict, trip, cols: list) -> dict:
+    row = {c: None for c in cols}
+    template = templates.get(trip.person)
+    if template is None and templates:
+        template = next(iter(templates.values()))
+    if template:
+        for col, value in template.items():
+            if col in row:
+                row[col] = value
+    return row
 
 
 def _apply_mode_overrides(df, mode_overrides: dict) -> None:
@@ -297,20 +432,24 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     df = pd.read_excel(raw_path).reset_index(drop=True)
     tid, removed, extras, _, overrides, purpose_overrides, mode_overrides = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops)
-    _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_trip_overrides(df, overrides)  # truncate splits and materialize merged rows
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
+    _normalize_pipe_first_columns(df)
+    templates = _row_templates(df)
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
     keep = [(i + 1) not in removed for i in range(n)]
-    cleaned = df[keep].copy()
+    cleaned = _drop_collapsed_merge_members(df[keep].copy())
 
     if extras:  # append synthesized rows: A = missing-trip stubs, Q = reviewed gaps
         cols = list(cleaned.columns)
         added = []
-        for trip_id, _kind, trip in _extra_ids(extras):
-            row = {c: None for c in cols}
+        for trip_id, kind, trip in _extra_ids(extras):
+            if kind == "merged_add":
+                continue
+            row = _extra_base_row(templates, trip, cols)
             row.update(_stub_row(trip))
             row["trip_id"] = trip_id
             added.append(row)
@@ -325,7 +464,7 @@ def _extra_ids(extras: list) -> list:
     out = []
     add_n = 0
     for kind, ref, trip in extras:
-        if kind == "add":
+        if kind in ("add", "merged_add"):
             add_n += 1
             out.append((project_trip_id("add", add_counter=add_n), kind, trip))
         elif kind == "split":
@@ -342,7 +481,8 @@ def _status_of(trip_id: str) -> str:
     return _STATUS.get(trip_id[:1], "kept")   # plain "143" keep ids fall through
 
 
-_EXTRA_FLAG = {"add": "missing_trip:accept", "review": "missing_activity:reviewed",
+_EXTRA_FLAG = {"add": "missing_trip:accept", "merged_add": "manual_add:merged",
+               "review": "missing_activity:reviewed",
                "split": "manual_split"}
 
 
@@ -359,9 +499,11 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     df = pd.read_excel(raw_path).reset_index(drop=True)
     tid, removed, extras, flag_by_row, overrides, purpose_overrides, mode_overrides = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops)
-    _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_trip_overrides(df, overrides)  # truncate splits and materialize merged rows
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
+    _normalize_pipe_first_columns(df)
+    templates = _row_templates(df)
 
     def row_id(i):
         r = i + 1
@@ -378,7 +520,7 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
         cols = list(df.columns)
         added = []
         for trip_id, kind, trip in _extra_ids(extras):
-            row = {c: None for c in cols}
+            row = _extra_base_row(templates, trip, cols)
             row.update(_stub_row(trip))
             row["trip_id"] = trip_id
             row["status"] = _status_of(trip_id)   # A->added, Q->reviewed-gap, S->split
