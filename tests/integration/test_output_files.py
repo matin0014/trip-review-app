@@ -14,10 +14,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app import generate, session
+from app import generate, regions, session
 from engine.classify import classify_all
 from engine.ids import with_ids
 from engine.loader import load_trips
+from engine.proposals import add_row
 
 DATE = "2024-11-05"
 PERSON = "P1"
@@ -109,12 +110,17 @@ def test_manual_delete_drops_from_cleaned_keeps_R_in_dofile(tmp_path, monkeypatc
 
 # --- merge ----------------------------------------------------------------
 
-def test_manual_merge_shares_one_M_id(tmp_path, monkeypatch):
+def test_manual_merge_collapses_to_one_row_in_cleaned(tmp_path, monkeypatch):
     sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
     session.append_event(sid, {"type": "manual_merge", "raw_rows": [1, 2], "day_key": DAY_KEY})
     cleaned, dofile = _export(sid)
-    assert tids(cleaned) == ["M1", "M1", "3"]          # both members share M<lowest row>
-    assert list(dofile["status"]) == ["merged", "merged", "kept"]
+    assert tids(cleaned) == ["M1", "3"]                # merge is ONE row in the cleaned file
+    m1 = cleaned[cleaned["trip_id"] == "M1"].iloc[0]
+    assert str(m1["start_time"]).startswith("09:00")   # first leg's start
+    assert str(m1["end_time"]).startswith("10:20")     # extended to the last leg's end
+    assert m1["mode_of_travel"] == "Auto Driver"       # first leg's mode kept
+    assert len(eval(m1["routes"])) == 4                # both legs' breadcrumbs concatenated
+    assert list(dofile["status"]) == ["merged", "merged", "kept"]  # Do-file keeps both legs
 
 
 def test_merging_an_already_merged_trip_extends_the_same_group(tmp_path, monkeypatch):
@@ -122,7 +128,8 @@ def test_merging_an_already_merged_trip_extends_the_same_group(tmp_path, monkeyp
     session.append_event(sid, {"type": "manual_merge", "raw_rows": [1, 2], "day_key": DAY_KEY})
     session.append_event(sid, {"type": "manual_merge", "raw_rows": [1, 3], "day_key": DAY_KEY})
     cleaned, _ = _export(sid)
-    assert tids(cleaned) == ["M1", "M1", "M1"]         # all fold into one M1 group
+    assert tids(cleaned) == ["M1"]                      # all three fold into ONE M1 row
+    assert str(cleaned.iloc[0]["end_time"]).startswith("11:20")  # extended to the last leg
 
 
 # --- split ----------------------------------------------------------------
@@ -162,6 +169,53 @@ def test_manual_add_appends_routed_A_row(tmp_path, monkeypatch):
     assert "added" in set(dofile["status"])
 
 
+def test_merge_logged_with_added_collapses_to_one_row(tmp_path, monkeypatch):
+    # add a trip 09:30-09:50, then MERGE it with logged row 1 (09:00-09:20). The
+    # merged trip must be ONE M-row anchored to row 1 (spanning to 09:50), NOT the
+    # logged row plus a stray A-row for the added leg (the reported bug).
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T09:30:00", "end_ts": f"{DATE}T09:50:00",
+        "mode": "Bike", "purpose": "Errand",
+        "start_lat": 49.278, "start_lon": -123.120, "end_lat": 49.30, "end_lon": -123.12,
+        "route": [[49.278, -123.120], [49.30, -123.12]], "day_key": DAY_KEY})
+    session.append_event(sid, {"type": "manual_merge",
+                               "raw_rows": [1, add_row(1)], "day_key": DAY_KEY})
+    cleaned, dofile = _export(sid)
+    assert tids(cleaned) == ["M1", "2", "3"]           # ONE merged row, no stray A-row
+    m1 = cleaned[cleaned["trip_id"] == "M1"].iloc[0]
+    assert str(m1["start_time"]).startswith("09:00")   # first (logged) leg's start
+    assert str(m1["end_time"]).startswith("09:50")     # extended over the added leg
+    assert m1["mode_of_travel"] == "Auto Driver"       # first leg's mode kept
+    assert len(eval(m1["routes"])) == 4                # logged (2) + added (2) breadcrumbs
+    assert "added" not in set(dofile["status"])        # the added leg folded into M1, not an A-row
+    assert "merged" in set(dofile["status"])
+
+
+def test_merge_two_added_trips_is_one_row(tmp_path, monkeypatch):
+    # Two ADDED trips merged: exactly ONE A-row spanning both (no duplicate, and the
+    # end must be the SECOND leg's, not the first's — the added+added corruption bug).
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T13:00:00", "end_ts": f"{DATE}T13:20:00",
+        "mode": "Bike", "purpose": "", "start_lat": 49.30, "start_lon": -123.12,
+        "end_lat": 49.31, "end_lon": -123.11, "route": [[49.30, -123.12], [49.31, -123.11]],
+        "day_key": DAY_KEY})
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T13:30:00", "end_ts": f"{DATE}T13:55:00",
+        "mode": "Bike", "purpose": "", "start_lat": 49.31, "start_lon": -123.11,
+        "end_lat": 49.33, "end_lon": -123.10, "route": [[49.31, -123.11], [49.33, -123.10]],
+        "day_key": DAY_KEY})
+    session.append_event(sid, {"type": "manual_merge",
+                               "raw_rows": [add_row(1), add_row(2)], "day_key": DAY_KEY})
+    cleaned, _ = _export(sid)
+    assert tids(cleaned) == ["1", "2", "3", "A01"]     # one merged add-row, not two
+    a = cleaned[cleaned["trip_id"] == "A01"].iloc[0]
+    assert str(a["start_time"]).startswith("13:00")    # first added leg's start
+    assert str(a["end_time"]).startswith("13:55")      # extended to the SECOND leg's end
+    assert len(eval(a["routes"])) == 4                 # both legs' breadcrumbs, no duplication
+
+
 # --- mode / purpose / time edits ------------------------------------------
 
 def test_manual_mode_and_purpose_overrides_land_in_cleaned(tmp_path, monkeypatch):
@@ -198,7 +252,8 @@ def test_accepted_fragment_merges_into_one_M_id(tmp_path, monkeypatch):
     session.append_event(sid, {"type": "decision",
                                "flag_id": flag_id(sid, "fragment"), "resolution": "accept"})
     cleaned, dofile = _export(sid)
-    assert tids(cleaned) == ["M1", "M1"]
+    assert tids(cleaned) == ["M1"]                      # accepted fragment -> one cleaned row
+    assert list(tids(dofile)) == ["M1", "M1"]           # Do-file still audits both legs
     assert "fragment:accept" in " ".join(str(x) for x in dofile["flags"])
 
 
@@ -219,6 +274,40 @@ def test_combined_edits_cleaned_and_dofile_agree(tmp_path, monkeypatch):
     dofile_ids = set(tids(dofile))
     assert set(tids(cleaned)) <= dofile_ids
     assert "R3" in dofile_ids                          # the delete is audited
+
+
+# --- out-of-region auto-removal (recoverable) -----------------------------
+
+# A second person whose single day leaves the study area (a Seattle endpoint).
+P2 = "P2"
+P2_DAY_KEY = f"{P2}|{DATE}"
+
+
+def out_of_region_rows():
+    """P1's clean in-region day plus P2's day with one trip ending in Seattle."""
+    return clean_day_rows() + [
+        trip("09:00:00", "09:40:00", 49.260, -123.120, 47.610, -122.340, person=P2),
+    ]
+
+
+def test_out_of_region_day_is_dropped_from_cleaned_and_audited(tmp_path, monkeypatch):
+    monkeypatch.setattr(regions, "_PATH", str(tmp_path / "no-regions.json"))  # use defaults
+    sid = _make_session(tmp_path, monkeypatch, out_of_region_rows())
+    cleaned, dofile = _export(sid)
+    assert tids(cleaned) == ["1", "2", "3"]            # P2's row 4 auto-removed
+    assert "4" in tids(dofile)                          # but retained in the audit file
+    row4 = dofile[dofile["trip_id"].astype(str) == "4"].iloc[0]
+    assert row4["status"] == "excluded"
+    assert "out_of_region:excluded" in str(row4["flags"])
+
+
+def test_recovering_an_out_of_region_day_re_includes_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(regions, "_PATH", str(tmp_path / "no-regions.json"))
+    sid = _make_session(tmp_path, monkeypatch, out_of_region_rows())
+    session.append_event(sid, {"type": "day_include", "day_key": P2_DAY_KEY, "include": True})
+    cleaned, dofile = _export(sid)
+    assert tids(cleaned) == ["1", "2", "3", "4"]        # P2's day recovered into the deliverable
+    assert "excluded" not in set(dofile["status"])
 
 
 # --- undo -----------------------------------------------------------------

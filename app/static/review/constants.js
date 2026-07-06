@@ -71,11 +71,16 @@ const _PINFO = [
   ['hasLicense', "Driver's license"], ['hasTransitPass', 'Transit pass'],
   ['employmentStatus', 'Employment'], ['workArrangement', 'Work arrangement'],
 ];
+// Some socio cells concatenate two respondents' answers as "A | B" (a shared
+// accessCode covering two people). We only consider the FIRST, so show the part
+// before the first '|'. No-op for plain values (city, vehicles, etc.).
+const firstRespondent = v => (typeof v === 'string' && v.includes('|')) ? v.split('|')[0].trim() : v;
+
 export function personInfoHTML(p){
   if(!p) return '';
   const rows = _PINFO.filter(([k])=>p[k]!=null && p[k]!=='')
     .map(([k,label])=>`<div class="pinfo-row"><span class="pinfo-k">${label}</span>`+
-      `<span class="pinfo-v">${p[k]}</span></div>`).join('');
+      `<span class="pinfo-v">${firstRespondent(p[k])}</span></div>`).join('');
   return rows ? `<div class="overline">Personal information</div>${rows}` : '';
 }
 

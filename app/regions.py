@@ -68,15 +68,27 @@ def outside_all(regions: list, lat: float, lon: float) -> bool:
     return not any(_inside(b, lat, lon) for b in regions)
 
 
+def day_is_outside(day_trips: list, regions: list) -> bool:
+    """True when ANY trip of the day has a START or END endpoint outside every box.
+    The single per-day out-of-region rule, shared by `stats`, the export drop, and
+    the day index."""
+    return any(outside_all(regions, t.start_lat, t.start_lon)
+               or outside_all(regions, t.end_lat, t.end_lon) for t in day_trips)
+
+
+def out_of_region_days(days: dict, regions: list) -> set:
+    """The set of ``day_key``s with a START/END endpoint outside every box. `days`
+    is ``{day_key: [Trip, ...]}`` (e.g. from `app.state.all_days`)."""
+    return {k for k, day_trips in days.items() if day_is_outside(day_trips, regions)}
+
+
 def stats(days: dict, regions: list) -> dict:
     """Count person-days (and their trips) with a START/END endpoint outside every
     box. `days` is ``{day_key: [Trip, ...]}`` (e.g. from `app.state.all_days`)."""
     out_days = out_trips = total_trips = 0
     for day_trips in days.values():
         total_trips += len(day_trips)
-        hit = any(outside_all(regions, t.start_lat, t.start_lon)
-                  or outside_all(regions, t.end_lat, t.end_lon) for t in day_trips)
-        if hit:
+        if day_is_outside(day_trips, regions):
             out_days += 1
             out_trips += len(day_trips)
     return {"days": out_days, "trips": out_trips,

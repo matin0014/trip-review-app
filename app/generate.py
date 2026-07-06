@@ -25,8 +25,8 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime
 
-from app import session
-from app.decisions import fixpoint, manual_ops, replay, resolutions
+from app import regions, session
+from app.decisions import excluded_days, fixpoint, manual_ops, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
@@ -89,10 +89,15 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     merged_root = {m: root for root, members in groups.items() if len(members) > 1 for m in members}
 
     # Manual merges: add their members to merged_root so they get M-prefix trip_ids.
+    # Root = lowest POSITIVE (workbook) member when present, so a logged+added merge
+    # anchors to the workbook row (matches engine `_merge_group`); an all-added merge
+    # keeps its negative root and stays a single A-row.
     for op in (day_ops or []):
         if op.get("type") == "manual_merge":
-            root = min(op["raw_rows"])
-            for r in op["raw_rows"]:
+            rr = op["raw_rows"]
+            pos = [r for r in rr if r >= 0]
+            root = min(pos) if pos else min(rr)
+            for r in rr:
                 merged_root[r] = root
 
     # merge_wins: a zero_move on a merged piece is NOT a removal.
@@ -132,6 +137,18 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
 
     live_by_row = {t.raw_row: t for t in live}
 
+    # Merge collapse (cleaned file only): each merge group becomes ONE row = its
+    # lowest workbook (positive) member, whose end/endpoint/route the caller
+    # overwrites from the live merged trip. That live trip spans every leg including
+    # an ADDED one that has no workbook row, so a logged+added merge collapses
+    # correctly instead of leaving the added leg as a stray A-row.
+    merge_overrides: dict = {}
+    for root, members in group_members.items():
+        if len(members) >= 2 and root >= 0:
+            lt = live_by_row.get(root)
+            if lt is not None:
+                merge_overrides[root] = lt
+
     rows: list = []
     overrides: dict = {}
     for t in sorted(day_trips, key=lambda x: x.start_ts):
@@ -163,7 +180,8 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             a, b = live_by_row.get(f.left[0]), live_by_row.get(f.right[0])
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
-    return rows, extras, surfaced, overrides, mode_overrides, time_overrides, purpose_overrides
+    return (rows, extras, surfaced, overrides, mode_overrides, time_overrides,
+            purpose_overrides, merge_overrides)
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -271,10 +289,47 @@ def _apply_time_overrides(df, time_overrides: dict) -> None:
             _set_cell(df, i, col, v)
 
 
+def _merge_drop_rows(tid: dict) -> set:
+    """The extra workbook legs to drop from the cleaned file so each merge group is
+    ONE row: for every ``M<root>`` id shared by 2+ workbook rows, keep the lowest and
+    drop the rest. The kept row's end/endpoint/route are overwritten separately from
+    the live merged trip (`_apply_merge_overrides`). The Do-file keeps every leg."""
+    groups: dict = defaultdict(list)
+    for raw_row, t in tid.items():
+        if isinstance(t, str) and t[:1] == "M":
+            groups[t].append(raw_row)
+    drop: set = set()
+    for members in groups.values():
+        if len(members) >= 2:
+            drop |= set(sorted(members)[1:])   # keep the lowest workbook row
+    return drop
+
+
+def _apply_merge_overrides(df, merge_overrides: dict) -> None:
+    """Overwrite each kept merge row (raw_row = df position + 1) to describe the WHOLE
+    merged trip: its end date/time/endpoint and concatenated route come from the live
+    merged trip, while start + mode + purpose stay the first leg's. This is what folds
+    an added leg (no workbook row) into the single kept row."""
+    for raw_row, t in merge_overrides.items():
+        i = raw_row - 1
+        if not (0 <= i < len(df)):
+            continue
+        vals = {
+            "end_date": t.end_ts.strftime("%Y-%m-%d"),
+            "end_time": t.end_ts.strftime("%H:%M:%S"),
+            "end_latitude": t.end_lat, "end_longitude": t.end_lon,
+            "routes": _route_cell(t.route),
+        }
+        for col, v in vals.items():
+            _set_cell(df, i, col, v)
+
+
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
-                    all_ops: list = None) -> tuple:
+                    all_ops: list = None, excluded: set = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
-    overrides, mode_overrides, time_overrides, purpose_overrides)``.
+    overrides, mode_overrides, time_overrides, purpose_overrides, excluded_rows,
+    merge_overrides)``. ``merge_overrides`` = {kept merge row: live merged trip},
+    cleaned-only, folds every leg (incl. an added one) into the one kept row.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
@@ -282,13 +337,16 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     `overrides` = {raw_row: live A trip} columns to overwrite on kept split rows;
     `mode_overrides` = {raw_row: mode} from manual mode changes;
     `time_overrides` = {raw_row: (start_ts, end_ts)} from manual time edits;
-    `purpose_overrides` = {raw_row: purpose} from manual purpose changes. When `res_map`
-    (flag_id -> resolution) is given, `flag_by_row` maps raw_row ->
-    ["<type>:<resolution>", ...] for the Do-file; otherwise it is empty. Shared by
-    the cleaned xlsx and the Do-file so they never disagree. ``all_ops`` is the
-    full ordered list of active manual ops from `decisions.manual_ops`; filtered
-    per day here.
+    `purpose_overrides` = {raw_row: purpose} from manual purpose changes;
+    `excluded_rows` = every raw row of an excluded (out-of-region, not recovered)
+    person-day. When `res_map` (flag_id -> resolution) is given, `flag_by_row` maps
+    raw_row -> ["<type>:<resolution>", ...] for the Do-file; otherwise it is empty.
+    Shared by the cleaned xlsx and the Do-file so they never disagree. ``all_ops``
+    is the full ordered list of active manual ops from `decisions.manual_ops`;
+    filtered per day here. ``excluded`` = day_keys to drop wholesale (their rows are
+    kept out of the cleaned file but recorded in the Do-file as ``out_of_region``).
     """
+    excluded = excluded or set()
     tid: dict = {}
     removed: set = set()
     extras: list = []
@@ -297,10 +355,19 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     mode_overrides: dict = {}
     time_overrides: dict = {}
     purpose_overrides: dict = {}
+    merge_overrides: dict = {}
+    excluded_rows: set = set()
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
+        if day_key in excluded:  # whole day dropped: no projection, just audit the rows
+            for x in day_trips:
+                excluded_rows.add(x.raw_row)
+                if res_map is not None:
+                    flag_by_row[x.raw_row].append("out_of_region:excluded")
+            continue
         day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
-        rows, day_extras, surfaced, day_overrides, day_mode_overrides, day_time_overrides, day_purpose_overrides = clean_day(
+        (rows, day_extras, surfaced, day_overrides, day_mode_overrides,
+         day_time_overrides, day_purpose_overrides, day_merge_overrides) = clean_day(
             day_trips, accepted_ids, day_ops=day_ops, params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
@@ -311,35 +378,43 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         mode_overrides.update(day_mode_overrides)
         time_overrides.update(day_time_overrides)
         purpose_overrides.update(day_purpose_overrides)
+        merge_overrides.update(day_merge_overrides)
         if res_map is not None:
             for f in surfaced:
                 tag = f"{f.flag_type}:{res_map.get(f.flag_id, 'pending')}"
                 touched = [f.trip] if f.trip is not None else list(f.left) + list(f.right)
                 for r in touched:
                     flag_by_row[r].append(tag)
-    return tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides, purpose_overrides
+    return (tid, removed, extras, flag_by_row, overrides, mode_overrides,
+            time_overrides, purpose_overrides, excluded_rows, merge_overrides)
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
-                     all_ops: list = None):
+                     all_ops: list = None, excluded: set = None):
     """Read the raw workbook and return it with a `trip_id` column added, removed
     rows dropped, and accepted missing-trip/reviewed-activity rows appended as
     ``A``/``Q`` rows. raw columns are preserved verbatim. Skipped/unparsed raw
-    rows stay as plain keeps.
+    rows stay as plain keeps. Rows of an `excluded` (out-of-region, not recovered)
+    day are dropped from the cleaned file entirely.
     """
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, _, overrides, mode_overrides, time_overrides, purpose_overrides = project_dataset(
-        raw_path, accepted_ids, params, all_ops=all_ops)
+    (tid, removed, extras, _, overrides, mode_overrides, time_overrides,
+     purpose_overrides, excluded_rows, merge_overrides) = project_dataset(
+        raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
+    _apply_merge_overrides(df, merge_overrides)  # kept merge row -> whole-trip end + route
+    merge_drop = _merge_drop_rows(tid)  # each merge -> one row (extra legs dropped)
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
-    keep = [(i + 1) not in removed for i in range(n)]
+    # drop zero_move/manual deletes, whole out-of-region days, and merged extra legs
+    dropped = removed | excluded_rows | merge_drop
+    keep = [(i + 1) not in dropped for i in range(n)]
     cleaned = df[keep].copy()
 
     if extras:  # append synthesized rows: A = missing-trip stubs, Q = reviewed gaps
@@ -383,18 +458,23 @@ _EXTRA_FLAG = {"add": "missing_trip:accept", "review": "missing_activity:reviewe
 
 
 def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFAULT,
-                    all_ops: list = None):
+                    all_ops: list = None, excluded: set = None):
     """The Do-file ledger as a DataFrame: EVERY loaded raw row (removed ones kept
     and marked ``R<row>``, unlike the cleaned file which drops them) plus the
     synthesized A/Q rows, with `trip_id` + `status` + `flags` columns added to the
     raw columns. `flags` lists each flag the row received and its resolution
     (``"<type>:<resolution>"``). The full audit record; same projection as cleaned.
+    Rows of an `excluded` out-of-region day keep their raw trip_id but are marked
+    ``status=excluded`` with an ``out_of_region:excluded`` flag (dropped from cleaned,
+    retained here so the reviewer can see — and recover — what was auto-removed).
     """
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides, purpose_overrides = project_dataset(
-        raw_path, accepted_ids, params, res_map, all_ops=all_ops)
+    # merge_overrides is cleaned-only (the Do-file keeps every leg untouched).
+    (tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides,
+     purpose_overrides, excluded_rows, _merge_overrides) = project_dataset(
+        raw_path, accepted_ids, params, res_map, all_ops=all_ops, excluded=excluded)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
@@ -408,7 +488,8 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
 
     n = len(df)
     df["trip_id"] = [row_id(i) for i in range(n)]
-    df["status"] = [_status_of(t) for t in df["trip_id"]]
+    df["status"] = ["excluded" if (i + 1) in excluded_rows else _status_of(t)
+                    for i, t in enumerate(df["trip_id"])]
     df["flags"] = ["; ".join(flag_by_row.get(i + 1, [])) for i in range(n)]
 
     if extras:
@@ -425,17 +506,30 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     return df
 
 
+def excluded_day_keys(raw_path: str, events: list) -> set:
+    """The set of person-day keys dropped from the cleaned export: out-of-region by
+    the locked region boxes, minus any the reviewer recovered, plus any removed by
+    hand. The single source of truth shared by the export and the day index."""
+    days = {f"{p}|{d}": t
+            for (p, d), t in group_person_days(load_trips(raw_path)).items()}
+    auto_out = regions.out_of_region_days(days, regions.load_regions())
+    return excluded_days(events, auto_out)
+
+
 def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     """Atomically write cleaned.xlsx + dofile.xlsx; return (cleaned, dofile) paths."""
     raw_path = os.path.join(session.session_dir(sid), session.read_proposals(sid)["raw_name"])
     events = session.read_events(sid)
     accepted, res_map = replay(events), resolutions(events)
     ops = manual_ops(events)
+    excluded = excluded_day_keys(raw_path, events)
 
     cleaned = os.path.abspath(os.path.join(session.session_dir(sid), "cleaned.xlsx"))
     dofile = os.path.abspath(os.path.join(session.session_dir(sid), "dofile.xlsx"))
-    _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params, all_ops=ops), cleaned)
-    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops), dofile)
+    _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params, all_ops=ops,
+                                        excluded=excluded), cleaned)
+    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops,
+                                       excluded=excluded), dofile)
     return cleaned, dofile
 
 

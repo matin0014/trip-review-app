@@ -10,8 +10,10 @@ xlsx exports next to ``proposals.json`` in the same session dir.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
 
@@ -44,6 +46,24 @@ def save_upload(sid: str, file_storage) -> str:
     path = os.path.join(d, name)
     file_storage.save(path)
     return path
+
+
+def save_bytes(sid: str, filename: str, data: bytes) -> str:
+    """Persist already-read upload bytes into the session dir; return its path.
+    Used by the upload flow, which reads the bytes once to hash them (for the
+    resume/duplicate check) before deciding to commit a new session."""
+    d = session_dir(sid)
+    os.makedirs(d, exist_ok=True)
+    name = secure_filename(filename or "") or "upload.xlsx"
+    path = os.path.join(d, name)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return path
+
+
+def content_sha(data: bytes) -> str:
+    """SHA-256 of the raw upload bytes: the key for resume-on-reupload."""
+    return hashlib.sha256(data).hexdigest()
 
 
 def write_proposals(sid: str, data: dict) -> None:
@@ -93,3 +113,63 @@ def _line_count(path: str) -> int:
         return 0
     with open(path, encoding="utf-8") as fh:
         return sum(1 for line in fh if line.strip())
+
+
+def _session_ids() -> list:
+    """Ids of every session that has a written baseline (an upload-only dir whose
+    baseline is not yet built is skipped)."""
+    if not os.path.isdir(SESSIONS_DIR):
+        return []
+    return [n for n in os.listdir(SESSIONS_DIR)
+            if os.path.isfile(os.path.join(SESSIONS_DIR, n, PROPOSALS))]
+
+
+def find_session_by_hash(sha: str) -> "str | None":
+    """The id of an existing session built from the same workbook bytes, or None.
+    Only sessions created after the resume feature carry a ``sha``; older ones never
+    match (so they never spuriously block a fresh upload)."""
+    for sid in _session_ids():
+        try:
+            if read_proposals(sid).get("sha") == sha:
+                return sid
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def delete_session(sid: str) -> bool:
+    """Permanently remove a session's working dir (raw file + baseline + decision
+    log). Returns True if a dir was removed. Irreversible — the caller confirms."""
+    d = session_dir(sid)
+    if os.path.isdir(d):
+        shutil.rmtree(d)
+        return True
+    return False
+
+
+def list_sessions() -> list:
+    """Every resumable session, newest-edited first: ``{sid, raw_name, counts,
+    n_events, modified}``. `modified` is the decision log's mtime (or the
+    baseline's, if nothing has been logged yet), so the list orders by real
+    review activity."""
+    out = []
+    for sid in _session_ids():
+        try:
+            p = read_proposals(sid)
+        except (OSError, ValueError):
+            continue
+        dec = os.path.join(session_dir(sid), DECISIONS)
+        anchor = dec if os.path.isfile(dec) else os.path.join(session_dir(sid), PROPOSALS)
+        mtime = os.path.getmtime(anchor)
+        out.append({
+            "sid": sid,
+            "raw_name": p.get("raw_name", "(unknown)"),
+            "counts": p.get("counts", {}),
+            "n_events": _line_count(dec),
+            "modified": datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds"),
+            "_mtime": mtime,
+        })
+    out.sort(key=lambda s: s["_mtime"], reverse=True)
+    for s in out:
+        del s["_mtime"]
+    return out

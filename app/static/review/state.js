@@ -10,6 +10,8 @@ export const layer = L.layerGroup().addTo(map);
 
 export const S = {
   byPerson: {},
+  dayFilter: 'active',     // day-picker filter: 'active' | 'removed' | 'all'
+  nExcluded: 0,            // count of days dropped from the export (out of region + deleted)
   people: {},              // accessCode -> {home,work,vehicles,city} (optional SD)
   modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
   cur: {person:null, key:null, data:null},

@@ -76,6 +76,31 @@ def resolutions(events: list) -> dict:
     return effective
 
 
+def day_overrides(events: list) -> dict:
+    """Effective per-day inclusion override, ``{day_key: bool}`` (last-event-wins).
+
+    A ``day_include`` event records the reviewer's explicit choice for ONE
+    person-day: ``include=True`` recovers an auto-removed out-of-region day,
+    ``include=False`` removes a day by hand. Sticky settings, kept OUT of the
+    undo/redo LIFO so a flag-level revert never silently re-adds a day the reviewer
+    pulled. Days with no override are absent (they follow the auto rule)."""
+    overrides: dict = {}
+    for e in events:
+        if e.get("type") == "day_include":
+            overrides[e["day_key"]] = bool(e["include"])
+    return overrides
+
+
+def excluded_days(events: list, auto_out: set) -> set:
+    """The ``day_key``s dropped from the cleaned export. ``auto_out`` is the set of
+    out-of-region days (auto-removed by default). A day is excluded when it is
+    out-of-region and not recovered, OR explicitly removed by hand."""
+    ov = day_overrides(events)
+    excluded = {k for k in auto_out if not ov.get(k, False)}  # auto-out unless recovered
+    excluded |= {k for k, inc in ov.items() if not inc}       # hand-removed
+    return excluded
+
+
 def manual_ops(events: list) -> list:
     """Ordered currently-active manual edit ops (after undo/redo).
 

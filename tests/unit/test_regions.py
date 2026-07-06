@@ -36,6 +36,16 @@ def test_stats_counts_endpoint_outside_days_and_their_trips():
     assert s["trips"] == 2                                   # both of p|d2's trips removed
 
 
+def test_out_of_region_days_returns_the_offending_keys():
+    days = {
+        "p|d1": [t(49.28, -123.12, 49.30, -123.10)],         # in Van
+        "p|d2": [t(49.28, -123.12, 47.61, -122.34)],          # ends in Seattle -> out
+        "q|d1": [t(49.88, -119.50, 50.05, -119.41)],          # Okanagan, in-region
+        "q|d2": [t(47.61, -122.34, 49.28, -123.12)],          # starts in Seattle -> out
+    }
+    assert regions.out_of_region_days(days, BOXES) == {"p|d2", "q|d2"}
+
+
 def test_clean_sorts_swapped_bounds_and_coerces_floats():
     raw = {"name": "x", "sw": ["49.5", "-122.3"], "ne": ["48.9", "-123.5"]}  # corners swapped
     c = regions._clean(raw)

@@ -57,6 +57,7 @@ $('bAddCommit').onclick = ()=>{
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
+$('dayFilter').onchange = ()=>{S.dayFilter=$('dayFilter').value; fillDays();};
 [lyTrips, lyStraight, lyFlags, lyEnds, lyHome].forEach(c=>c.onchange=render);
 // Showing the region boxes zooms out to them (at a day's zoom the edges are off-screen).
 lyRegions.onchange = ()=>{ if(lyRegions.checked) map.fitBounds(regionBounds(), {padding:[30,30]}); render(); };
