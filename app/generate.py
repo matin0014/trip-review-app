@@ -25,7 +25,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime
 
-from app import regions, session
+from app import metrics, regions, session
 from app.decisions import excluded_days, fixpoint, manual_ops, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
@@ -193,6 +193,37 @@ def _write_atomic_xlsx(df, out: str) -> None:
     with open(tmp, "wb") as fh:
         fh.write(buf.getvalue())
     os.replace(tmp, out)
+
+
+def _write_atomic_xlsx_sheets(sheets: dict, out: str) -> None:
+    """Write ``{sheet_name: df}`` to `out` atomically, one sheet per entry, in
+    order (the first is sheet index 0, what a plain ``pd.read_excel(out)`` reads)."""
+    import io
+
+    import pandas as pd
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for name, df in sheets.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+    tmp = out + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(buf.getvalue())
+    os.replace(tmp, out)
+
+
+def build_precision_df(raw_path: str, events: list, params=DEFAULT):
+    """The precision sheet: one row per scored ``(detector, origin)`` pair with
+    its TP/FP counts and precision (``None`` when never decided)."""
+    import pandas as pd
+
+    table = metrics.precision_table(raw_path, events, params)
+    rows = [
+        {"detector": ftype, "origin": origin, "tp": c["tp"], "fp": c["fp"],
+         "precision": c["precision"]}
+        for (ftype, origin), c in sorted(table.items())
+    ]
+    return pd.DataFrame(rows, columns=["detector", "origin", "tp", "fp", "precision"])
 
 
 def _route_cell(route) -> str:
@@ -528,8 +559,10 @@ def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     dofile = os.path.abspath(os.path.join(session.session_dir(sid), "dofile.xlsx"))
     _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params, all_ops=ops,
                                         excluded=excluded), cleaned)
-    _write_atomic_xlsx(build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops,
-                                       excluded=excluded), dofile)
+    dofile_df = build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops,
+                                excluded=excluded)
+    precision_df = build_precision_df(raw_path, events, params)
+    _write_atomic_xlsx_sheets({"dofile": dofile_df, "precision": precision_df}, dofile)
     return cleaned, dofile
 
 

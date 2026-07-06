@@ -257,6 +257,38 @@ def test_accepted_fragment_merges_into_one_M_id(tmp_path, monkeypatch):
     assert "fragment:accept" in " ".join(str(x) for x in dofile["flags"])
 
 
+# --- precision sheet --------------------------------------------------------
+
+def test_precision_sheet_counts_an_accepted_fragment_as_a_tp(tmp_path, monkeypatch):
+    rows = [
+        trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120),
+        trip("09:21:00", "09:40:00", 49.2781, -123.1201, 49.296, -123.120),
+    ]
+    sid = _make_session(tmp_path, monkeypatch, rows)
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "fragment"), "resolution": "accept"})
+    _cleaned, dofile_path = generate.generate_cleaned_and_dofile(sid)
+    precision = pd.read_excel(dofile_path, sheet_name="precision")
+    row = precision[precision["detector"] == "fragment"].iloc[0]
+    assert row["origin"] == "ingest" and row["tp"] == 1 and row["fp"] == 0
+    assert row["precision"] == 1.0
+
+
+def test_precision_sheet_counts_a_waived_fragment_as_an_fp(tmp_path, monkeypatch):
+    rows = [
+        trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120),
+        trip("09:21:00", "09:40:00", 49.2781, -123.1201, 49.296, -123.120),
+    ]
+    sid = _make_session(tmp_path, monkeypatch, rows)
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "fragment"), "resolution": "waive"})
+    _cleaned, dofile_path = generate.generate_cleaned_and_dofile(sid)
+    precision = pd.read_excel(dofile_path, sheet_name="precision")
+    row = precision[precision["detector"] == "fragment"].iloc[0]
+    assert row["origin"] == "ingest" and row["tp"] == 0 and row["fp"] == 1
+    assert row["precision"] == 0.0
+
+
 # --- combined edits stay consistent across both files ---------------------
 
 def test_combined_edits_cleaned_and_dofile_agree(tmp_path, monkeypatch):
