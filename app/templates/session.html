@@ -23,13 +23,20 @@
    <div class="overline">Participant <span class="aux" id="pcount"></span></div>
    <select id="person"></select>
    <div class="overline">Date</div>
+   <select id="dayFilter" title="Filter the day list">
+    <option value="active">Active days</option>
+    <option value="removed">Removed days</option>
+    <option value="all">All days</option>
+   </select>
    <select id="day"></select>
+   <div id="dayRegionBar" class="region-bar" style="display:none"></div>
    <div class="overline">Layers</div>
    <label class="lyr"><input type="checkbox" id="lyTrips" checked> Trip lines</label>
    <label class="lyr"><input type="checkbox" id="lyStraight"> Straight lines (start to end)</label>
    <label class="lyr"><input type="checkbox" id="lyFlags" checked> Problem flags</label>
    <label class="lyr"><input type="checkbox" id="lyEnds" checked> Endpoints</label>
    <label class="lyr"><input type="checkbox" id="lyHome" checked> Home / work bubbles</label>
+   <label class="lyr"><input type="checkbox" id="lyRegions"> Region boxes (Vancouver / Central Okanagan)</label>
    <label class="lyr"><input type="checkbox" id="lyFollow" checked> Follow selection across edits</label>
    <div class="personinfo" id="personinfo"></div>
    <div class="overline">On this day</div>
@@ -40,7 +47,6 @@
   </aside>
   <div class="app__map">
    <div id="map"></div>
-   <div class="phasenote">Live projection · <b>read-only</b> preview</div>
   </div>
   <aside class="insp">
    <div class="insp-hint"><span class="ic">⚠</span><span>Flags show their current status. Click a flag to see what it means and what Accept or Waive will do.</span></div>

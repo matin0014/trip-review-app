@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import os
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 
-from app import baseline, decisions, generate, routing, session, state
+from app import baseline, decisions, generate, regions, routing, session, state
 from engine.classify import classify_all
 from engine.loader import load_socio, load_trips
 
@@ -77,6 +77,16 @@ def _live_pending_counts(sid: str) -> dict:
     return counts
 
 
+def _region_status(sid: str) -> tuple:
+    """``(auto_out, excluded)`` day-key sets for a session: the out-of-region days
+    (auto-removed by default) and the effective excluded set after the reviewer's
+    recover / hand-remove overrides. The day index's ⊘ marker and the export's drop
+    read the same two sets, so the screen and the deliverable always agree."""
+    auto_out = regions.out_of_region_days(state.all_days(sid), regions.load_regions())
+    excluded = decisions.excluded_days(session.read_events(sid), auto_out)
+    return auto_out, excluded
+
+
 def _combine_dt(day_key: str, hms: str) -> str:
     """Rebuild a naive ISO instant from a day_key's date and an ``HH:MM[:SS]``
     time typed in the UI (the engine attaches the day's timezone)."""
@@ -101,8 +111,18 @@ def create_app() -> Flask:
         if file is None or not file.filename:
             abort(400, "no file uploaded")
 
+        raw = file.read()                       # read once: needed to hash + to save
+        sha = session.content_sha(raw)
+        # Resume-on-reupload: unless the user chose "start new", offer the existing
+        # session for this exact workbook instead of forking a duplicate.
+        if request.form.get("force_new") != "1":
+            existing = session.find_session_by_hash(sha)
+            if existing:
+                return jsonify({"duplicate": True, "existing": existing,
+                                "raw_name": file.filename})
+
         sid = session.new_id()
-        path = session.save_upload(sid, file)
+        path = session.save_bytes(sid, file.filename, raw)
         try:
             trips = load_trips(path)
             flags = classify_all(trips)
@@ -112,8 +132,23 @@ def create_app() -> Flask:
 
         data = baseline.build_baseline(trips, flags, os.path.basename(path))
         data["people"] = people
+        data["sha"] = sha
         session.write_proposals(sid, data)
-        return redirect(url_for("review", sid=sid))
+        return jsonify({"sid": sid, "redirect": url_for("review", sid=sid)})
+
+    @app.get("/api/sessions")
+    def api_sessions():
+        """Resumable sessions for the landing page, newest-edited first."""
+        return jsonify(session.list_sessions())
+
+    @app.post("/api/<sid>/delete")
+    def api_delete_session(sid):
+        """Permanently delete one session (raw file + baseline + decision log)."""
+        if not session.exists(sid):
+            abort(404)
+        session.delete_session(sid)
+        state.clear(sid)   # drop the gone session's cached trips
+        return jsonify({"deleted": sid})
 
     @app.get("/s/<sid>")
     def review(sid):
@@ -127,15 +162,18 @@ def create_app() -> Flask:
             abort(404)
         data = session.read_proposals(sid)
         pending = _live_pending_counts(sid)
+        auto_out, excluded = _region_status(sid)
         days = [
             {"key": k, "person": v["person"], "date": v["date"],
-             "n_trips": len(v["trips"]), "n_flags": pending.get(k, 0)}
+             "n_trips": len(v["trips"]), "n_flags": pending.get(k, 0),
+             "out_of_region": k in auto_out, "excluded": k in excluded}
             for k, v in data["days"].items()
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
         return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
                         "days": days, "mode_speeds": _mode_speeds(sid),
-                        "people": data.get("people", {})})
+                        "people": data.get("people", {}),
+                        "n_excluded": len(excluded)})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):
@@ -312,6 +350,18 @@ def create_app() -> Flask:
         session.append_event(sid, {
             "type": "manual_time", "raw_row": int(raw_row),
             "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/day_include")
+    def api_day_include(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key, include = body.get("day_key"), body.get("include")
+        if not day_key or not isinstance(include, bool):
+            abort(400, "require day_key and include (bool)")
+        session.append_event(sid, {"type": "day_include", "day_key": day_key,
+                                   "include": include})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

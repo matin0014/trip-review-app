@@ -12,6 +12,7 @@ export function loadDays(){
   const c = d.counts;
   $('dataset').textContent = `${d.raw_name}`;
   $('summary').textContent = `${c.trips} trips · ${c.flags} flags\n${c.persons} people · ${c.person_days} person-days`;
+  S.nExcluded = d.n_excluded || 0;
   S.people = d.people || {};
   S.modeSpeeds = d.mode_speeds || [];
   $('modespeeds').innerHTML = S.modeSpeeds.map(m=>
@@ -28,13 +29,93 @@ export function loadDays(){
 }
 
 // ⚠ badge text for one day entry, shared by the initial fill and the live update.
-const dayOptLabel = x => `${x.date} · ${weekday(x.date)}`+(x.n_flags?`  ⚠${x.n_flags}`:'');
+// An out-of-region day removed from the export gets a ⊘ prefix.
+const dayOptLabel = x => (x.excluded?'⊘ ':'')+`${x.date} · ${weekday(x.date)}`+(x.n_flags?`  ⚠${x.n_flags}`:'');
+
+// Day-list filter: which days the picker shows. "removed" carries the live count.
+const DAY_FILTERS = {active:x=>!x.excluded, removed:x=>x.excluded, all:()=>true};
+export function updateDayFilter(){
+ const sel = $('dayFilter');
+ if(!sel) return;
+ const n = (S.byPerson[S.cur.person] || []).filter(x=>x.excluded).length;  // removed for THIS person
+ sel.value = S.dayFilter;
+ [...sel.options].forEach(o=>{ if(o.value==='removed') o.textContent = `Removed days (${n})`; });
+}
+
+// The per-day action bar under the picker. Removed day -> Recover; kept day -> a
+// red Delete-day button (with a two-step confirm so a stray click can't drop a day).
+function renderDayActions(entry){
+ const bar = $('dayRegionBar');
+ if(!entry){ bar.style.display='none'; bar.innerHTML=''; return; }
+ bar.style.display = '';
+ if(entry.excluded){            // removed (auto out-of-region OR hand-deleted) -> offer recover
+  bar.className = 'region-bar removed';
+  const lead = entry.out_of_region ? 'Leaves the study area — ' : '';
+  bar.innerHTML = `<span class="region-msg">⊘ ${lead}<b>removed</b> from the export.</span>`+
+                  '<button id="bRecoverDay" class="act apply">Recover day</button>';
+  $('bRecoverDay').onclick = ()=>setDayIncluded(entry.key, true);
+  return;
+ }
+ if(entry.out_of_region){       // kept but flagged: note it, still allow delete
+  bar.className = 'region-bar kept';
+  bar.innerHTML = '<span class="region-msg">⊘ Leaves the study area, but <b>kept</b> (recovered).</span>'+
+                  '<button id="bDeleteDay" class="dangerbtn">Delete day</button>';
+ } else {                       // ordinary in-region day: just the delete control
+  bar.className = 'region-bar plain';
+  bar.innerHTML = '<button id="bDeleteDay" class="dangerbtn">Delete day</button>';
+ }
+ $('bDeleteDay').onclick = ()=>confirmDelete(entry);
+}
+
+// Step two of the delete: swap the bar for an explicit confirm/cancel pair.
+function confirmDelete(entry){
+ const bar = $('dayRegionBar');
+ bar.className = 'region-bar removed';
+ bar.innerHTML = '<span class="region-msg"><b>Delete this day?</b> It is dropped from the export (recoverable later).</span>'+
+                 '<button id="bDelYes" class="dangerbtn">Yes, delete</button>'+
+                 '<button id="bDelNo" class="act">Cancel</button>';
+ $('bDelYes').onclick = ()=>setDayIncluded(entry.key, false);
+ $('bDelNo').onclick  = ()=>renderDayActions(entry);
+}
 
 export function fillDays(){
  daySel.innerHTML = '';
- S.byPerson[S.cur.person].slice().sort((a,b)=>a.date<b.date?-1:1).forEach(x=>
-   daySel.add(new Option(dayOptLabel(x), x.key)));
+ updateDayFilter();   // refresh the "Removed days (N)" count for the current person
+ const prev = S.cur.key;
+ const pred = DAY_FILTERS[S.dayFilter] || DAY_FILTERS.active;
+ S.byPerson[S.cur.person].slice().sort((a,b)=>a.date<b.date?-1:1).filter(pred)
+   .forEach(x=> daySel.add(new Option(dayOptLabel(x), x.key)));
+ if(!daySel.options.length){            // nothing matches the current filter for this person
+  S.cur.key = null; S.cur.data = null;
+  const msg = S.dayFilter==='removed' ? 'no removed days for this participant'
+            : 'all days removed — switch the filter to “Removed days” to recover';
+  $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
+    `<span class="muted">${msg}</span>`;
+  renderDayActions(null);
+  return;
+ }
+ if(prev && [...daySel.options].some(o=>o.value===prev)) daySel.value = prev;  // keep the open day
  S.cur.key = daySel.value; loadDay();
+}
+
+// Recover (include=true) or delete (false) one day, then refresh the picker.
+export function setDayIncluded(dayKey, include){
+ fetch(`/api/${SID}/day_include`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({day_key:dayKey, include})}).then(()=>refreshDays());
+}
+
+// Re-pull the day index after a recover/delete: update each entry's excluded /
+// out_of_region / flag count in place, then re-render the picker (keeping the open day).
+export function refreshDays(){
+ return fetch(`/api/${SID}/days`).then(r=>r.json()).then(d=>{
+  S.nExcluded = d.n_excluded || 0;
+  const byKey = {}; d.days.forEach(x=>byKey[x.key]=x);
+  Object.values(S.byPerson).forEach(list=>list.forEach(e=>{
+   const u = byKey[e.key];
+   if(u){ e.excluded=u.excluded; e.out_of_region=u.out_of_region; e.n_flags=u.n_flags; }
+  }));
+  fillDays();
+ });
 }
 
 // keep=true preserves the current show/hide + selection across a decision
@@ -50,6 +131,7 @@ export function loadDay(fit=true, keep=false){
    const opt = [...daySel.options].find(o=>o.value===S.cur.key);
    if(opt) opt.textContent = dayOptLabel(entry);
   }
+  renderDayActions(entry);   // recover / delete-day controls for the open day
   if(keep){
    const T=d.trips.length; S.hidden=new Set([...S.hidden].filter(s=>s<=T));
    if(S.followSel && S.selId!=null){           // re-bind selection by stable id (raw_row)

@@ -143,6 +143,53 @@ def test_merge_idempotent():
     assert twice[0].end_ts == at(20)
 
 
+def test_merge_logged_with_added_anchors_to_the_workbook_row():
+    # add a trip (negative raw_row), then merge it with logged row 1. The merged
+    # trip must keep the WORKBOOK row id (1), not the added trip's negative id, so
+    # the export shows one M-row instead of a stray A-row (the reported bug).
+    logged = mk(1, 0, 10)
+    add_op = {"type": "manual_add",
+              "start_ts": at(30).strftime("%Y-%m-%dT%H:%M:%S"),
+              "end_ts": at(40).strftime("%Y-%m-%dT%H:%M:%S"),
+              "mode": "Bike", "purpose": "",
+              "start_lat": 0.0, "start_lon": 0.0, "end_lat": 0.1, "end_lon": 0.1,
+              "route": [[0.0, 0.0], [0.1, 0.1]]}
+    merge_op = {"type": "manual_merge", "raw_rows": [1, add_row(1)]}
+    out = apply_manual_ops([logged], [add_op, merge_op])
+    assert len(out) == 1
+    m = out[0]
+    assert m.raw_row == 1                       # anchored to the workbook row, NOT add_row(1)
+    assert m.start_ts == at(0) and m.end_ts == at(40)   # spans the logged + added legs
+
+
+def test_merge_two_added_trips_reapplies_without_corruption():
+    # Merging two ADDED trips: the merged trip keeps add_row(2)'s id, so add_row(1)
+    # would re-materialise on the next fixpoint round and re-merge, flipping the end
+    # back to the first leg + duplicating its route. `absorbed` must stop that.
+    seed = mk(1, 0, 5)                           # a workbook trip for tz/person inference
+    a1 = {"type": "manual_add",
+          "start_ts": at(10).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "mode": "Bike", "purpose": "",
+          "start_lat": 0.0, "start_lon": 0.0, "end_lat": 0.1, "end_lon": 0.1,
+          "route": [[0.0, 0.0], [0.1, 0.1]]}
+    a2 = {"type": "manual_add",
+          "start_ts": at(30).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(40).strftime("%Y-%m-%dT%H:%M:%S"),
+          "mode": "Bike", "purpose": "",
+          "start_lat": 0.1, "start_lon": 0.1, "end_lat": 0.2, "end_lon": 0.2,
+          "route": [[0.1, 0.1], [0.2, 0.2]]}
+    ops = [a1, a2, {"type": "manual_merge", "raw_rows": [add_row(1), add_row(2)]}]
+    once = apply_manual_ops([seed], ops)
+    twice = apply_manual_ops(once, ops)          # fixpoint re-applies ops every round
+    m1 = [t for t in once if t.raw_row < 0][0]
+    m2 = [t for t in twice if t.raw_row < 0][0]
+    assert m1.end_ts == at(40) and m2.end_ts == at(40)         # spans to the SECOND leg
+    assert (m1.end_lat, m1.end_lon) == (0.2, 0.2)              # second leg's endpoint
+    assert (m2.end_lat, m2.end_lon) == (0.2, 0.2)             # stable across re-apply
+    assert len(m1.route) == 4 and len(m2.route) == 4           # no breadcrumb duplication
+
+
 # --- split ----------------------------------------------------------------
 
 def test_split_divides_route_by_timestamp():

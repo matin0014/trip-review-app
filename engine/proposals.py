@@ -208,7 +208,9 @@ def _apply_add(trips: list, op: dict, n: int) -> list:
     (re-applied) -> no-op for fixpoint convergence.
     """
     row = add_row(n)
-    if any(t.raw_row == row for t in trips):
+    # Present as its own row, OR already merged into another trip (`absorbed`) — either
+    # way do not re-materialise it, so a merge that swallowed this add stays converged.
+    if any(t.raw_row == row or row in t.absorbed for t in trips):
         return trips
     tz = trips[0].start_ts.tzinfo if trips else None
     person = op.get("person") if op.get("person") is not None else (trips[0].person if trips else None)
@@ -314,12 +316,20 @@ def _merge_roots(flags: list, removed: set, merge_types: tuple = ("fragment",)) 
 
 def _merge_group(group: list) -> Trip:
     """Merge a fragment group into one trip: A's start, B's end, concatenated
-    routes in timestamp order; destination piece keeps mode/purpose."""
+    routes in timestamp order; destination piece keeps mode/purpose.
+
+    Identity raw_row = the lowest POSITIVE (workbook) member when the group has one,
+    else the lowest (all-added groups keep their negative id). This anchors a
+    logged+added merge to its real workbook row so the export shows ONE M-row
+    instead of the logged row plus a stray A-row for the added leg."""
     g = sorted(group, key=lambda t: t.start_ts)
     first, last = g[0], g[-1]
     route = sorted((p for t in g for p in t.route), key=lambda p: p.ts)
+    _rows = [t.raw_row for t in g]
+    _pos = [r for r in _rows if r >= 0]
+    absorbed = frozenset(r for t in g for r in ({t.raw_row} | set(t.absorbed)))
     return Trip(
-        raw_row=min(t.raw_row for t in g),
+        raw_row=min(_pos) if _pos else min(_rows),
         person=first.person,
         mode=last.mode,
         purpose=last.purpose,
@@ -330,6 +340,7 @@ def _merge_group(group: list) -> Trip:
         end_lat=last.end_lat,
         end_lon=last.end_lon,
         route=route,
+        absorbed=absorbed,
     )
 
 

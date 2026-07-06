@@ -8,8 +8,8 @@
 
 import {S, map, layer} from './state.js';
 import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
-        modeOptions, hmToMin, minToHm} from './constants.js';
-import {lyTrips, lyStraight, lyFlags, lyEnds, lyHome} from './dom.js';
+        modeOptions, hmToMin, minToHm, REGION_BOXES} from './constants.js';
+import {lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyRegions} from './dom.js';
 import {decide, manualDelete, manualSplit} from './api.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
@@ -219,7 +219,29 @@ export function drawMap(fit){
   });
  }
 
+ drawRegions();
  drawBubbles();
+}
+
+// Study-area boxes (Vancouver area + Central Okanagan), drawn as bold dashed
+// rectangles with a light fill so the boundaries are visible even from far out.
+// interactive:false. Toggling the layer on auto-fits the map to both boxes
+// (see fitRegions in app.js) since at a day's zoom the edges sit off-screen.
+function drawRegions(){
+ if(!lyRegions.checked) return;
+ REGION_BOXES.forEach(b=>{
+  L.rectangle([b.sw, b.ne], {color:b.color, weight:5, opacity:1, dashArray:'14,9',
+    fill:true, fillColor:b.color, fillOpacity:0.08, interactive:false}).addTo(layer);
+  L.marker([b.ne[0], b.sw[1]], {interactive:false, icon:L.divIcon({className:'',
+    html:`<div class="reglabel" style="background:${b.color}">${b.name}</div>`})}).addTo(layer);
+ });
+}
+
+// Combined bounds of all region boxes, for fitting the map when the layer is shown.
+export function regionBounds(){
+ const lats = REGION_BOXES.flatMap(b=>[b.sw[0], b.ne[0]]);
+ const lons = REGION_BOXES.flatMap(b=>[b.sw[1], b.ne[1]]);
+ return [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]];
 }
 
 // Translucent home/work context bubbles for the current participant (optional SD).

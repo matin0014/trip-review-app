@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from app.decisions import replay
+from app.decisions import day_overrides, excluded_days, replay
 
 
 def dec(flag_id, resolution):
     return {"type": "decision", "flag_id": flag_id, "resolution": resolution}
+
+
+def inc(day_key, include):
+    return {"type": "day_include", "day_key": day_key, "include": include}
 
 
 REVERT = {"type": "revert"}
@@ -66,3 +70,35 @@ def test_clear_undecides_a_flag():
 def test_revert_a_clear_restores_the_decision():
     # accept -> clear -> revert(the clear) should bring the accept back
     assert replay([dec("a", "accept"), dec("a", "clear"), REVERT]) == {"a"}
+
+
+# --- day_include overrides + excluded_days (out-of-region auto-removal) ---
+
+AUTO = {"p|d2", "q|d1"}   # the days the region rule flagged as out-of-region
+
+
+def test_no_override_auto_out_days_are_excluded():
+    assert excluded_days([], AUTO) == AUTO
+
+
+def test_recover_re_includes_an_auto_out_day():
+    # the reviewer recovers q|d1 -> only p|d2 stays excluded
+    assert excluded_days([inc("q|d1", True)], AUTO) == {"p|d2"}
+
+
+def test_hand_remove_excludes_an_in_region_day():
+    # p|d1 is in-region (not in AUTO) but the reviewer removed it by hand
+    assert excluded_days([inc("p|d1", False)], AUTO) == AUTO | {"p|d1"}
+
+
+def test_day_override_is_last_event_wins():
+    # recover then remove again -> excluded
+    assert excluded_days([inc("q|d1", True), inc("q|d1", False)], AUTO) == AUTO
+    # remove then recover -> included
+    assert excluded_days([inc("q|d1", False), inc("q|d1", True)], AUTO) == {"p|d2"}
+
+
+def test_day_overrides_ignores_revert_redo():
+    # day_include is a sticky setting, OUT of the undo/redo LIFO: a revert must not
+    # silently re-add a day the reviewer pulled.
+    assert day_overrides([inc("p|d1", False), REVERT]) == {"p|d1": False}

@@ -42,6 +42,11 @@ class Trip:
     end_lat: float
     end_lon: float
     route: list[RoutePoint] = field(default_factory=list)
+    # Raw rows merged INTO this trip (a merge collapses several rows into one). Lets
+    # a re-applied `manual_add` for an already-merged leg no-op instead of
+    # re-materialising it — the fixpoint idempotency when a merge absorbs an added
+    # trip whose negative raw_row is not the group's surviving id.
+    absorbed: frozenset = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
