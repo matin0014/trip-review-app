@@ -205,6 +205,7 @@ def create_app() -> Flask:
         accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
         ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == key]
         live_trips, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
+        live_trips = [routing.route_trip(t) for t in live_trips]  # OSM path for stubs
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 

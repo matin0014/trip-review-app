@@ -25,7 +25,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime
 
-from app import metrics, regions, session
+from app import metrics, regions, routing, session
 from app.decisions import excluded_days, fixpoint, manual_ops, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
@@ -77,16 +77,28 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     def union(a: int, b: int) -> None:
         ra, rb = find(a), find(b)
         if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)  # root = lowest raw row
+            parent[max(ra, rb)] = min(ra, rb)  # deterministic parent; real root recomputed below
 
     for f in applied:
         if f.flag_type in ("fragment", "mode_change"):
             union(f.left[0], f.right[0])
 
+    # Canonical M-id root = lowest POSITIVE (workbook) member when the group has one,
+    # else its lowest member. This makes an accepted fragment/mode_change between a
+    # logged trip and a manually-ADDED trip anchor to the workbook row (M<row>) rather
+    # than the added leg's negative raw_row, matching engine `_merge_group` and the
+    # manual_merge branch below; without it the merge collapses to the wrong id and
+    # `merge_overrides` (root >= 0 only) never extends the row to the full span.
     groups: dict = defaultdict(list)
     for r in parent:
         groups[find(r)].append(r)
-    merged_root = {m: root for root, members in groups.items() if len(members) > 1 for m in members}
+    merged_root = {}
+    for members in groups.values():
+        if len(members) > 1:
+            pos = [m for m in members if m >= 0]
+            root = min(pos) if pos else min(members)
+            for m in members:
+                merged_root[m] = root
 
     # Manual merges: add their members to merged_root so they get M-prefix trip_ids.
     # Root = lowest POSITIVE (workbook) member when present, so a logged+added merge
@@ -338,9 +350,11 @@ def _merge_drop_rows(tid: dict) -> set:
 
 def _apply_merge_overrides(df, merge_overrides: dict) -> None:
     """Overwrite each kept merge row (raw_row = df position + 1) to describe the WHOLE
-    merged trip: its end date/time/endpoint and concatenated route come from the live
-    merged trip, while start + mode + purpose stay the first leg's. This is what folds
-    an added leg (no workbook row) into the single kept row."""
+    merged trip, exactly as the viewer shows it: end date/time/endpoint, concatenated
+    route, AND mode + purpose all come from the live merged trip (which takes the LAST
+    leg's mode/purpose, per engine `_merge_group`); only the start stays the first
+    leg's. This folds an added leg (no workbook row) into the single kept row. Applied
+    BEFORE the manual mode/purpose/time overrides so an explicit hand-edit still wins."""
     for raw_row, t in merge_overrides.items():
         i = raw_row - 1
         if not (0 <= i < len(df)):
@@ -350,6 +364,7 @@ def _apply_merge_overrides(df, merge_overrides: dict) -> None:
             "end_time": t.end_ts.strftime("%H:%M:%S"),
             "end_latitude": t.end_lat, "end_longitude": t.end_lon,
             "routes": _route_cell(t.route),
+            "mode_of_travel": t.mode, "purpose_of_travel": t.purpose,
         }
         for col, v in vals.items():
             _set_cell(df, i, col, v)
@@ -435,10 +450,10 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
      purpose_overrides, excluded_rows, merge_overrides) = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
-    _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
+    _apply_merge_overrides(df, merge_overrides)  # kept merge row -> whole-trip end/route/mode/purpose
+    _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes (win over the merge default)
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
-    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
-    _apply_merge_overrides(df, merge_overrides)  # kept merge row -> whole-trip end + route
+    _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes (win over merge default)
     merge_drop = _merge_drop_rows(tid)  # each merge -> one row (extra legs dropped)
 
     n = len(df)
@@ -451,7 +466,9 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     if extras:  # append synthesized rows: A = missing-trip stubs, Q = reviewed gaps
         cols = list(cleaned.columns)
         added = []
-        for trip_id, _kind, trip in _extra_ids(extras):
+        for trip_id, kind, trip in _extra_ids(extras):
+            if kind == "add":
+                trip = routing.route_trip(trip)  # OSM street path for a route-less stub
             row = {c: None for c in cols}
             row.update(_stub_row(trip))
             row["trip_id"] = trip_id
@@ -527,6 +544,8 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
         cols = list(df.columns)
         added = []
         for trip_id, kind, trip in _extra_ids(extras):
+            if kind == "add":
+                trip = routing.route_trip(trip)  # OSM street path for a route-less stub
             row = {c: None for c in cols}
             row.update(_stub_row(trip))
             row["trip_id"] = trip_id
