@@ -474,7 +474,31 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
             row["trip_id"] = trip_id
             added.append(row)
         cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
+        cleaned = _sort_chronologically(cleaned)  # slot A/Q/split rows into their real spot
     return cleaned
+
+
+def _chrono_key(df):
+    """A per-row sortable datetime from the raw ``start_date`` + ``start_time``
+    columns, robust to the tz-offset suffix (``-08:00``) and sub-second precision.
+    Unparseable rows -> NaT (sorted last within their person)."""
+    import pandas as pd
+
+    date = pd.to_datetime(df["start_date"], errors="coerce").dt.normalize()
+    tstr = (df["start_time"].astype(str)
+            .str.replace(r"([+-]\d{2}:?\d{2})$", "", regex=True).str.strip())
+    return date + pd.to_timedelta(tstr, errors="coerce")
+
+
+def _sort_chronologically(df):
+    """Order every row by start time WITHIN each person, so a synthesized A/Q/split
+    row lands in its real chronological position instead of piling up at the bottom.
+    Person blocks keep their original first-appearance order (not alphabetised), and
+    real rows keep their relative order on ties (stable sort)."""
+    person_order = {p: i for i, p in enumerate(dict.fromkeys(df["accessCode"]))}
+    return (df.assign(_p=df["accessCode"].map(person_order), _o=_chrono_key(df))
+            .sort_values(["_p", "_o"], kind="stable", na_position="last")
+            .drop(columns=["_p", "_o"]).reset_index(drop=True))
 
 
 def _extra_ids(extras: list) -> list:

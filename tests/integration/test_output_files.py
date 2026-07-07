@@ -176,11 +176,24 @@ def test_manual_add_appends_routed_A_row(tmp_path, monkeypatch):
         "route": [[49.30, -123.12], [49.305, -123.115], [49.31, -123.11]],
         "day_key": DAY_KEY})
     cleaned, dofile = _export(sid)
-    assert tids(cleaned) == ["1", "2", "3", "A01"]     # appended after the keeps
+    assert tids(cleaned) == ["1", "2", "3", "A01"]     # 12:00 add sorts after the 09/10/11 trips
     added = cleaned[cleaned["trip_id"] == "A01"].iloc[0]
     assert added["mode_of_travel"] == "Bike" and added["purpose_of_travel"] == "Shopping"
     assert added["routes"] != "[]"                     # OSM path serialised into the cell
     assert "added" in set(dofile["status"])
+
+
+def test_manual_add_sorts_into_chronological_position(tmp_path, monkeypatch):
+    # an add whose start falls BETWEEN existing trips must slot in by time, not pile
+    # up at the bottom of the cleaned file.
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())   # trips at 09:00 / 10:00 / 11:00
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T09:30:00", "end_ts": f"{DATE}T09:45:00",
+        "mode": "Bike", "purpose": "Errand",
+        "start_lat": 49.278, "start_lon": -123.120, "end_lat": 49.28, "end_lon": -123.120,
+        "route": [[49.278, -123.120], [49.28, -123.120]], "day_key": DAY_KEY})
+    cleaned, _ = _export(sid)
+    assert tids(cleaned) == ["1", "A01", "2", "3"]     # slotted between trip 1 and trip 2
 
 
 def test_merge_logged_with_added_collapses_to_one_row(tmp_path, monkeypatch):

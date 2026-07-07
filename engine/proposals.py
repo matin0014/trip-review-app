@@ -38,6 +38,13 @@ def add_row(n: int) -> int:
     return -(_ADD_BASE + n)
 
 
+def is_add_row(raw_row: int) -> bool:
+    """True when `raw_row` belongs to a manual add (its route is a SYNTHETIC OSM
+    path with evenly-spread timestamps, not real GPS). Adds sit below `-_ADD_BASE`;
+    split B-pieces (`> -_ADD_BASE`) and ingest/stub rows do not qualify."""
+    return raw_row < -_ADD_BASE
+
+
 def project(trips: list, flags: list, merge_types: tuple = ("fragment",),
             merge_wins: bool = False) -> list:
     """One apply pass (no cascade): remove zero_move trips -> merge the pairs in
@@ -136,12 +143,31 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             for t in trips:
                 if t.raw_row == row:
                     tz = t.start_ts.tzinfo
-                    t = replace(t, start_ts=_split_datetime(op["start_ts"], tz),
-                                end_ts=_split_datetime(op["end_ts"], tz))
+                    new_start = _split_datetime(op["start_ts"], tz)
+                    new_end = _split_datetime(op["end_ts"], tz)
+                    t = replace(t, start_ts=new_start, end_ts=new_end,
+                                route=_retime_route(t.route, new_start, new_end, row))
                 out.append(t)
             # times changed -> re-sort so consecutive-pair classification sees order
             trips = sorted(out, key=lambda t: (str(t.person), t.start_ts))
     return trips
+
+
+def _retime_route(route: list, start_ts, end_ts, raw_row: int) -> list:
+    """Keep a trip's route consistent with an edited [start, end] window so the
+    measured moving speed reflects the NEW duration, not the original one.
+
+    A manual add carries a SYNTHETIC route (OSM geometry with evenly-spread fake
+    timestamps), so re-spread the same coordinates across the new window: the full
+    path is preserved and the speed tracks the new duration. Every other trip carries
+    REAL GPS breadcrumbs, so instead CLIP to the points whose own timestamps fall
+    inside the new window, never inventing or rescaling real observations. An empty
+    route (a missing-trip stub) stays empty."""
+    if not route:
+        return route
+    if is_add_row(raw_row):
+        return _route_from_coords([[p.lat, p.lon] for p in route], start_ts, end_ts)
+    return [p for p in route if start_ts <= p.ts <= end_ts]
 
 
 def _split_datetime(s: str, tzinfo) -> datetime:

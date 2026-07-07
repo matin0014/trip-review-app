@@ -108,6 +108,33 @@ def test_time_idempotent_and_last_wins():
     assert twice[0].start_ts == at(3) and twice[0].end_ts == at(7)
 
 
+def test_time_respreads_a_synthetic_add_route():
+    # a manual add carries a SYNTHETIC route; editing its window must re-spread the
+    # SAME coordinates across the new span (so the measured speed tracks the new
+    # duration), keeping every point — not clip them away.
+    t = routed(add_row(1), 0, 10)                       # 11 breadcrumbs at at(0)..at(10)
+    op = {"type": "manual_time", "raw_row": add_row(1),
+          "start_ts": at(2).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(8).strftime("%Y-%m-%dT%H:%M:%S")}
+    out = apply_manual_ops([t], [op])[0]
+    assert len(out.route) == 11                         # full path preserved
+    assert out.route[0].ts == at(2) and out.route[-1].ts == at(8)   # re-spread to new window
+    assert [p.lon for p in out.route] == [float(m) for m in range(11)]  # coords unchanged
+    # idempotent (fixpoint re-applies each round)
+    assert apply_manual_ops([out], [op])[0].route[0].ts == at(2)
+
+
+def test_time_clips_real_gps_breadcrumbs():
+    # a real logged trip carries REAL GPS; editing its window must CLIP to the
+    # breadcrumbs whose own timestamps fall inside it, never rescaling real data.
+    t = routed(1, 0, 10)                                # real trip, ts at(0)..at(10)
+    op = {"type": "manual_time", "raw_row": 1,
+          "start_ts": at(2).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(8).strftime("%Y-%m-%dT%H:%M:%S")}
+    out = apply_manual_ops([t], [op])[0]
+    assert [p.ts for p in out.route] == [at(m) for m in range(2, 9)]  # minutes 2..8 kept, real ts
+
+
 # --- delete ---------------------------------------------------------------
 
 def test_delete_drops_the_row():
