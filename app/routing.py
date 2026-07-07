@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
+from dataclasses import replace
+
+from engine.proposals import _route_from_coords
 
 OSRM = "https://router.project-osrm.org/route/v1"
 _TIMEOUT_S = 8
@@ -56,3 +59,20 @@ def _query(profile: str, start_lat: float, start_lon: float,
     routes = data.get("routes") or []
     coords = routes[0].get("geometry", {}).get("coordinates", []) if routes else []
     return [[float(lat), float(lon)] for lon, lat in coords]  # OSRM yields [lon, lat]
+
+
+def route_trip(t):
+    """Fill an OSM street path into a route-less SYNTHESIZED trip (a missing-trip
+    stub, or a manual add whose add-time routing failed), so it follows real streets
+    in the viewer and the export instead of drawing a straight line. Timestamps are
+    spread evenly across the trip's span (reusing engine `_route_from_coords`).
+
+    A negative ``raw_row`` marks a synthesized trip; real logged trips (>= 0) and
+    trips that already carry breadcrumbs are returned unchanged, as is any OSRM
+    failure (degrades to the existing straight line). Cached per endpoint, so a
+    re-render / re-export of the same stub makes no new network call."""
+    if t.route or t.raw_row >= 0:
+        return t
+    coords = osrm_route(t.start_lat, t.start_lon, t.end_lat, t.end_lon, t.mode)
+    pts = _route_from_coords(coords, t.start_ts, t.end_ts)
+    return replace(t, route=pts) if pts else t

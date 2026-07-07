@@ -14,11 +14,19 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app import generate, regions, session
+from app import generate, regions, routing, session
 from engine.classify import classify_all
 from engine.ids import with_ids
 from engine.loader import load_trips
 from engine.proposals import add_row
+
+
+@pytest.fixture(autouse=True)
+def _offline_osrm(monkeypatch):
+    """Keep the export tests offline + fast: no real OSRM calls. By default the
+    routing degrades to a straight line (the graceful-failure path); the one test
+    that checks stub routing re-stubs a fake path for itself."""
+    monkeypatch.setattr(routing, "osrm_route", lambda *a, **k: [])
 
 DATE = "2024-11-05"
 PERSON = "P1"
@@ -111,14 +119,20 @@ def test_manual_delete_drops_from_cleaned_keeps_R_in_dofile(tmp_path, monkeypatc
 # --- merge ----------------------------------------------------------------
 
 def test_manual_merge_collapses_to_one_row_in_cleaned(tmp_path, monkeypatch):
-    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    # give the two legs DISTINCT modes so the last-leg-mode rule is actually exercised
+    rows = [
+        trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120, mode="Auto Driver"),
+        trip("10:00:00", "10:20:00", 49.278, -123.120, 49.296, -123.120, mode="SkyTrain"),
+        trip("11:00:00", "11:20:00", 49.296, -123.120, 49.314, -123.120, mode="Auto Driver"),
+    ]
+    sid = _make_session(tmp_path, monkeypatch, rows)
     session.append_event(sid, {"type": "manual_merge", "raw_rows": [1, 2], "day_key": DAY_KEY})
     cleaned, dofile = _export(sid)
     assert tids(cleaned) == ["M1", "3"]                # merge is ONE row in the cleaned file
     m1 = cleaned[cleaned["trip_id"] == "M1"].iloc[0]
     assert str(m1["start_time"]).startswith("09:00")   # first leg's start
     assert str(m1["end_time"]).startswith("10:20")     # extended to the last leg's end
-    assert m1["mode_of_travel"] == "Auto Driver"       # first leg's mode kept
+    assert m1["mode_of_travel"] == "SkyTrain"          # LAST leg's mode, matching the viewer
     assert len(eval(m1["routes"])) == 4                # both legs' breadcrumbs concatenated
     assert list(dofile["status"]) == ["merged", "merged", "kept"]  # Do-file keeps both legs
 
@@ -162,11 +176,24 @@ def test_manual_add_appends_routed_A_row(tmp_path, monkeypatch):
         "route": [[49.30, -123.12], [49.305, -123.115], [49.31, -123.11]],
         "day_key": DAY_KEY})
     cleaned, dofile = _export(sid)
-    assert tids(cleaned) == ["1", "2", "3", "A01"]     # appended after the keeps
+    assert tids(cleaned) == ["1", "2", "3", "A01"]     # 12:00 add sorts after the 09/10/11 trips
     added = cleaned[cleaned["trip_id"] == "A01"].iloc[0]
     assert added["mode_of_travel"] == "Bike" and added["purpose_of_travel"] == "Shopping"
     assert added["routes"] != "[]"                     # OSM path serialised into the cell
     assert "added" in set(dofile["status"])
+
+
+def test_manual_add_sorts_into_chronological_position(tmp_path, monkeypatch):
+    # an add whose start falls BETWEEN existing trips must slot in by time, not pile
+    # up at the bottom of the cleaned file.
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())   # trips at 09:00 / 10:00 / 11:00
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T09:30:00", "end_ts": f"{DATE}T09:45:00",
+        "mode": "Bike", "purpose": "Errand",
+        "start_lat": 49.278, "start_lon": -123.120, "end_lat": 49.28, "end_lon": -123.120,
+        "route": [[49.278, -123.120], [49.28, -123.120]], "day_key": DAY_KEY})
+    cleaned, _ = _export(sid)
+    assert tids(cleaned) == ["1", "A01", "2", "3"]     # slotted between trip 1 and trip 2
 
 
 def test_merge_logged_with_added_collapses_to_one_row(tmp_path, monkeypatch):
@@ -186,7 +213,7 @@ def test_merge_logged_with_added_collapses_to_one_row(tmp_path, monkeypatch):
     m1 = cleaned[cleaned["trip_id"] == "M1"].iloc[0]
     assert str(m1["start_time"]).startswith("09:00")   # first (logged) leg's start
     assert str(m1["end_time"]).startswith("09:50")     # extended over the added leg
-    assert m1["mode_of_travel"] == "Auto Driver"       # first leg's mode kept
+    assert m1["mode_of_travel"] == "Bike"              # LAST leg's mode (the added leg), matching the viewer
     assert len(eval(m1["routes"])) == 4                # logged (2) + added (2) breadcrumbs
     assert "added" not in set(dofile["status"])        # the added leg folded into M1, not an A-row
     assert "merged" in set(dofile["status"])
@@ -255,6 +282,56 @@ def test_accepted_fragment_merges_into_one_M_id(tmp_path, monkeypatch):
     assert tids(cleaned) == ["M1"]                      # accepted fragment -> one cleaned row
     assert list(tids(dofile)) == ["M1", "M1"]           # Do-file still audits both legs
     assert "fragment:accept" in " ".join(str(x) for x in dofile["flags"])
+
+
+def test_accepted_missing_trip_stub_is_osrm_routed(tmp_path, monkeypatch):
+    # Accepting a missing_trip inserts an A-stub for the gap; its route must follow
+    # the OSM street path (like a manual add), not stay a straight "[]" line.
+    rows = [
+        trip("09:00:00", "09:04:00", 49.260, -123.120, 49.278, -123.120),   # ~30 km/h legs
+        trip("09:14:00", "09:18:00", 49.287, -123.120, 49.305, -123.120),   # ~1 km / 10 min gap
+    ]
+    sid = _make_session(tmp_path, monkeypatch, rows)
+    fake_path = [[49.278, -123.120], [49.282, -123.120], [49.287, -123.120]]
+    monkeypatch.setattr(routing, "osrm_route", lambda *a, **k: fake_path)
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "missing_trip"), "resolution": "accept"})
+    cleaned, _ = _export(sid)
+    a = cleaned[cleaned["trip_id"] == "A01"].iloc[0]
+    assert a["routes"] != "[]"                          # routed, not a straight line
+    assert len(eval(a["routes"])) == 3                  # the OSM path breadcrumbs
+
+
+def test_accepted_fragment_of_logged_and_added_anchors_to_workbook_row(tmp_path, monkeypatch):
+    # Reproduces the Sunday export bug: accepting a fragment between a LOGGED trip
+    # (row 1) and a manually-ADDED trip must anchor the merge to the workbook row
+    # (M1) and extend the row over the whole span (to 09:50), NOT collapse onto the
+    # added leg's negative raw_row (M-2000001) with the logged leg's short end time.
+    from engine.classify import classify_day, group_person_days
+    from engine.proposals import apply_manual_ops
+
+    rows = [trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120)]
+    sid = _make_session(tmp_path, monkeypatch, rows)
+    add_op = {
+        "type": "manual_add", "start_ts": f"{DATE}T09:21:00", "end_ts": f"{DATE}T09:50:00",
+        "mode": "Bike", "purpose": "Errand",
+        "start_lat": 49.2781, "start_lon": -123.1201, "end_lat": 49.30, "end_lon": -123.12,
+        "route": [[49.2781, -123.1201], [49.30, -123.12]], "day_key": DAY_KEY}
+    session.append_event(sid, add_op)
+
+    # fragment id must be computed with the add present (flag_id() ignores manual ops)
+    raw_path = f"{session.session_dir(sid)}/raw.xlsx"
+    live = apply_manual_ops(load_trips(raw_path), [add_op])
+    frag = next(f.flag_id for day in group_person_days(live).values()
+                for f in with_ids(classify_day(day)) if f.flag_type == "fragment")
+    session.append_event(sid, {"type": "decision", "flag_id": frag, "resolution": "accept"})
+
+    cleaned, dofile = _export(sid)
+    assert tids(cleaned) == ["M1"]                      # anchored to the workbook row, not M-2000001
+    m1 = cleaned[cleaned["trip_id"] == "M1"].iloc[0]
+    assert str(m1["start_time"]).startswith("09:00")   # logged leg's start
+    assert str(m1["end_time"]).startswith("09:50")     # extended over the added leg (was 09:20)
+    assert "added" not in set(dofile["status"])         # the added leg folded in, not a stray A-row
 
 
 # --- precision sheet --------------------------------------------------------
