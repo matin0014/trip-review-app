@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Distributions: Before vs After Cleaning</title>
+  <style>
+    /* SKELETON styles: page furniture only. Fill in to match the reference dashboard
+       (KPI tiles, region cards, one card per indicator with a raw/cleaned legend). */
+    :root { --raw: #6b7cff; --cleaned: #f0a253; --ink: #1c2330; --line: #e3e6ee; }
+    body { font-family: system-ui, sans-serif; color: var(--ink); margin: 0; background: #f6f7fb; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .tiles, .regions { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .indicator { margin-top: 24px; }
+    .legend .raw { color: var(--raw); }
+    .legend .cleaned { color: var(--cleaned); }
+    canvas { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Network Distributions: Before vs After Cleaning</h1>
+    <p class="legend"><span class="raw">&#9632; before (raw)</span> &nbsp; <span class="cleaned">&#9632; after (cleaned)</span></p>
+
+    <!-- KPI tiles + regional overview (summary.py) -->
+    <section id="kpi-tiles" class="tiles"></section>
+    <section id="region-cards" class="regions"></section>
+
+    <!-- One card per indicator; JS builds the charts from DATA (indicators.py) -->
+    <section id="indicators"></section>
+  </div>
+
+  <!-- render.py inlines the vendored Chart.js here -->
+  <script>/* __CHART_JS__ */</script>
+
+  <!-- render.py injects the computed payload here -->
+  <script>window.DATA = /* __DATA__ */ null;</script>
+
+  <script>
+    // SKELETON: iterate window.DATA and draw each section. To implement:
+    //   - renderTiles(DATA.header), renderRegions(DATA.regions)
+    //   - for each id in DATA.indicators: build the right Chart.js chart(s),
+    //     each with a raw series (--raw) and a cleaned series (--cleaned).
+    // TODO: implement rendering.
+  </script>
+</body>
+</html>

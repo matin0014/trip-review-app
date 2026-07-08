@@ -34,4 +34,5 @@ flask_err.txt
 
 # Generated outputs (charts + the prototype viewer embed real GPS; regenerable)
 analysis/output/
+analysis/dashboard/output/
 prototype/viewer.html
