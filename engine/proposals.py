@@ -34,7 +34,15 @@ def split_b_row(orig_row: int) -> int:
 
 
 def add_row(n: int) -> int:
-    """The raw_row for the n-th (1-based) manual add within a day."""
+    """The raw_row for the n-th (1-based) manual add within a day.
+
+    `n` MUST be a stable identity assigned once when the add is first created
+    (the event's ``add_seq``, a per-day counter of every add ever logged,
+    reverted or not) -- never recomputed from how many adds are CURRENTLY
+    active. Recomputing from position let a later add silently inherit an
+    earlier (reverted) add's raw_row, and with it any `manual_time`/`mode`/
+    `purpose` edits still active against that row -- a real bug, fixed
+    2026-07-08."""
     return -(_ADD_BASE + n)
 
 
@@ -108,7 +116,9 @@ def apply_manual_ops(trips: list, ops: list) -> list:
     ``manual_purpose`` (relabel one trip's purpose; pure label too), and
     ``manual_time`` (re-stamp one trip's start/end instants; unlike mode this
     feeds the cascade, since neighbour gaps depend on times). Unknown op types are
-    silently skipped.
+    silently skipped. ``manual_add``'s raw_row uses the op's own ``add_seq`` (a
+    stable per-day id assigned once at creation -- see `add_row`), falling back to
+    positional numbering only for legacy events logged before that field existed.
 
     Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
     cascade round, so split/add detect their already-materialised piece (by its
@@ -129,8 +139,8 @@ def apply_manual_ops(trips: list, ops: list) -> list:
         elif kind == "manual_split":
             trips = _apply_split(trips, op)
         elif kind == "manual_add":
-            add_n += 1
-            trips = _apply_add(trips, op, add_n)
+            add_n += 1  # legacy fallback only, for events logged before add_seq existed
+            trips = _apply_add(trips, op, op.get("add_seq", add_n))
         elif kind == "manual_mode":
             row, mode = op["raw_row"], op["mode"]
             trips = [replace(t, mode=mode) if t.raw_row == row else t for t in trips]

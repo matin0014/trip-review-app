@@ -310,6 +310,8 @@ def test_add_without_route_has_empty_breadcrumbs():
 
 
 def test_add_indexes_by_position_and_is_idempotent():
+    # LEGACY fallback: ops with no `add_seq` (pre-fix logs) still number by
+    # position, same as before. New adds always carry add_seq (see below).
     trips = [mk(1, 0, 10)]
     ops = [
         {"type": "manual_add", "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
@@ -323,3 +325,50 @@ def test_add_indexes_by_position_and_is_idempotent():
     assert {add_row(1), add_row(2)} <= {t.raw_row for t in once}
     twice = apply_manual_ops(once, ops)        # re-applying must not duplicate
     assert sorted(t.raw_row for t in twice) == sorted(t.raw_row for t in once)
+
+
+def test_add_seq_is_honored_over_position():
+    # a stable add_seq assigns raw_row directly, regardless of how many manual_add
+    # ops precede it in the list.
+    trips = [mk(1, 0, 10)]
+    op = {"type": "manual_add", "add_seq": 7, "mode": "Bus",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(35).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 0.0, "start_lon": 0.0, "end_lat": 0.0, "end_lon": 0.0}
+    out = apply_manual_ops(trips, [op])
+    assert any(t.raw_row == add_row(7) for t in out)
+
+
+def test_reverted_add_edits_do_not_leak_onto_a_later_add(person="A"):
+    # Reproduces the reported bug: an earlier add (seq=2) was edited (time/mode/
+    # purpose) then reverted -- but the edit ops themselves stayed active. A
+    # brand-new add (seq=3, its OWN stable id) must NOT inherit those stale
+    # edits across fixpoint rounds, even though the edits still target raw_row
+    # add_row(2) and a re-apply loop (like the live fixpoint) re-runs every round.
+    day_key = "p|2024-11-05"
+    ops = [
+        {"type": "manual_add", "add_seq": 1, "day_key": day_key, "mode": "Auto Driver",
+         "purpose": "Shopping",
+         "start_ts": at(0).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(15).strftime("%Y-%m-%dT%H:%M:%S"),
+         "start_lat": 0.0, "start_lon": 0.0, "end_lat": 0.0, "end_lon": 0.0},
+        # stale edits from the now-reverted seq=2 add, still active, aimed at
+        # its raw_row (which no longer has a matching add op)
+        {"type": "manual_time", "raw_row": add_row(2), "day_key": day_key,
+         "start_ts": at(15).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(38).strftime("%Y-%m-%dT%H:%M:%S")},
+        {"type": "manual_mode", "raw_row": add_row(2), "day_key": day_key, "mode": "Auto Passenger"},
+        {"type": "manual_purpose", "raw_row": add_row(2), "day_key": day_key, "purpose": "Shopping"},
+        # the NEW add: a distinct, stable seq=3 (NOT a reused slot)
+        {"type": "manual_add", "add_seq": 3, "day_key": day_key, "mode": "Auto Driver",
+         "purpose": "Social",
+         "start_ts": at(60).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(75).strftime("%Y-%m-%dT%H:%M:%S"),
+         "start_lat": 1.0, "start_lon": 1.0, "end_lat": 2.0, "end_lon": 2.0},
+    ]
+    trips = [mk(1, -30, -20, person=person)]
+    for _ in range(3):   # simulate several fixpoint rounds re-applying the same ops
+        trips = apply_manual_ops(trips, ops)
+    new_add = [t for t in trips if t.raw_row == add_row(3)][0]
+    assert new_add.start_ts == at(60) and new_add.end_ts == at(75)
+    assert new_add.mode == "Auto Driver" and new_add.purpose == "Social"

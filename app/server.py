@@ -97,6 +97,16 @@ def _combine_dt(day_key: str, hms: str) -> str:
     return f"{date}T{hms}"
 
 
+def _next_add_seq(sid: str, day_key: str) -> int:
+    """The next stable per-day add identity: 1 + every ``manual_add`` EVER logged
+    for this day (reverted ones included, so a number is never reused). Assigned
+    once here at creation time and carried in the event forever after -- the
+    engine must not recompute it from how many adds are currently active (see
+    `engine.proposals.add_row`)."""
+    return 1 + sum(1 for e in session.read_events(sid)
+                   if e.get("type") == "manual_add" and e.get("day_key") == day_key)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -326,6 +336,7 @@ def create_app() -> Flask:
         route = routing.osrm_route(s_lat, s_lon, e_lat, e_lon, mode)
         session.append_event(sid, {
             "type": "manual_add",
+            "add_seq": _next_add_seq(sid, day_key),
             "start_ts": start_ts,
             "end_ts": end_ts,
             "mode": mode, "purpose": body.get("purpose", ""),
