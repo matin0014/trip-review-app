@@ -25,6 +25,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Personal Claude Code overrides (model choice etc.; not team-shared)
+.claude/settings.local.json
+
 # Excel lock files
 ~$*.xlsx
 
