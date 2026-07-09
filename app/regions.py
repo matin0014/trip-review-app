@@ -16,8 +16,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
-_PATH = os.environ.get("TRIP_REGIONS_FILE", "regions.json")
+
+def _default_regions_file() -> str:
+    """Where regions.json lives absent an explicit override: next to the frozen
+    exe (see app.session._default_sessions_dir for the same reasoning); the
+    plain cwd-relative ``"regions.json"`` in dev, unchanged."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "regions.json")
+    return "regions.json"
+
+
+_PATH = os.environ.get("TRIP_REGIONS_FILE", _default_regions_file())
 
 DEFAULT_REGIONS = [
     {"name": "Vancouver area",   "sw": [49.0, -123.29], "ne": [49.39, -122.18], "color": "#1558d6"},

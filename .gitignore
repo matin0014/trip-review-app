@@ -18,6 +18,7 @@ data/
 build/
 dist/
 *.spec
+!trip_review.spec
 
 # Editor / OS
 .vscode/

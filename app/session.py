@@ -14,12 +14,24 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import uuid
 from datetime import datetime, timezone
 
 from werkzeug.utils import secure_filename
 
-SESSIONS_DIR = os.environ.get("TRIP_SESSIONS_DIR", "sessions")
+
+def _default_sessions_dir() -> str:
+    """Where session data lives absent an explicit override: next to the frozen
+    exe (PyInstaller sets ``sys.frozen`` + ``sys.executable``) so a reviewer's
+    data lands beside the app regardless of the launch directory; the plain
+    cwd-relative ``"sessions"`` in dev, unchanged."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), "sessions")
+    return "sessions"
+
+
+SESSIONS_DIR = os.environ.get("TRIP_SESSIONS_DIR", _default_sessions_dir())
 PROPOSALS = "proposals.json"
 DECISIONS = "decisions.jsonl"
 

@@ -10,6 +10,7 @@ manual edits, generate, metrics) arrive in later parts.
 from __future__ import annotations
 
 import os
+import sys
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 
@@ -18,6 +19,18 @@ from engine.classify import classify_all
 from engine.loader import load_socio, load_trips
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
+
+
+def _app_dir() -> str:
+    """The ``app`` package directory templates/static live under, resolved
+    explicitly rather than left to Flask's ``__name__``-based default: under a
+    PyInstaller build, ``sys._MEIPASS`` (set for both one-folder and one-file)
+    is where the bundled ``app/templates`` and ``app/static`` datas land
+    (see the spec's ``datas`` mapping); in dev it's just this file's directory."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base is not None:
+        return os.path.join(base, "app")
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 # Realistic typical speed range (low, high) km/h per travel mode: a fixed
@@ -108,7 +121,9 @@ def _next_add_seq(sid: str, day_key: str) -> int:
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    base = _app_dir()
+    app = Flask(__name__, template_folder=os.path.join(base, "templates"),
+                static_folder=os.path.join(base, "static"))
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     @app.get("/")

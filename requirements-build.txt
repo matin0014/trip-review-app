@@ -1,0 +1,4 @@
+# Build-only dependencies (PyInstaller packaging), separate from
+# requirements.txt (the app's runtime deps) so a plain dev/test setup never
+# needs these.
+pyinstaller>=6.11,<7
