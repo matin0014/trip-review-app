@@ -31,7 +31,7 @@ VALID_RESOLUTIONS = APPLY_RESOLUTIONS | WAIVE_RESOLUTIONS | frozenset({"clear"})
 # flag decisions. Unknown types are ignored (forward-compatibility).
 _MANUAL_TYPES = frozenset({
     "manual_delete", "manual_merge", "manual_split", "manual_add", "manual_mode",
-    "manual_purpose", "manual_time"
+    "manual_purpose", "manual_time", "manual_reposition"
 })
 
 

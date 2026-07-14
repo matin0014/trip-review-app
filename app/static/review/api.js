@@ -186,3 +186,8 @@ export function manualAdd(payload){
  fetch(`/api/${SID}/manual_add`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify(payload)}).then(()=>loadDay(false,true));
 }
+
+export function manualReposition(rawRow, end, lat, lon, dayKey){
+ fetch(`/api/${SID}/manual_reposition`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, end, lat, lon, day_key:dayKey})}).then(()=>loadDay(false,true));
+}

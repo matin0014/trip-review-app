@@ -19,6 +19,7 @@ from datetime import datetime
 
 from engine.ids import with_ids
 from engine.models import RoutePoint, Trip
+from engine.timeparse import parse_ts
 
 # Stable, position-derived raw_rows for synthesized manual trips. A split's B-piece
 # is keyed off its origin row; an added trip is keyed off its per-day add index.
@@ -115,10 +116,16 @@ def apply_manual_ops(trips: list, ops: list) -> list:
     mode; pure label, since the engine classifies on measured speed),
     ``manual_purpose`` (relabel one trip's purpose; pure label too), and
     ``manual_time`` (re-stamp one trip's start/end instants; unlike mode this
-    feeds the cascade, since neighbour gaps depend on times). Unknown op types are
-    silently skipped. ``manual_add``'s raw_row uses the op's own ``add_seq`` (a
-    stable per-day id assigned once at creation -- see `add_row`), falling back to
-    positional numbering only for legacy events logged before that field existed.
+    feeds the cascade, since neighbour gaps depend on times), and
+    ``manual_reposition`` (move one trip's start or end point; the op carries the
+    COMPLETE final route -- kept breadcrumbs + a fresh routed patch to the new
+    point, timestamps and all -- precomputed ONCE server-side at request time, so
+    applying it here is a plain overwrite, not an incremental splice; see
+    `app.server.api_manual_reposition` for how that value is built). Unknown op
+    types are silently skipped. ``manual_add``'s raw_row uses the op's own
+    ``add_seq`` (a stable per-day id assigned once at creation -- see `add_row`),
+    falling back to positional numbering only for legacy events logged before that
+    field existed.
 
     Every case is IDEMPOTENT: the live fixpoint re-applies the same op list on each
     cascade round, so split/add detect their already-materialised piece (by its
@@ -160,7 +167,22 @@ def apply_manual_ops(trips: list, ops: list) -> list:
                 out.append(t)
             # times changed -> re-sort so consecutive-pair classification sees order
             trips = sorted(out, key=lambda t: (str(t.person), t.start_ts))
+        elif kind == "manual_reposition":
+            row, end = op["raw_row"], op["end"]
+            pts = _points_from_triplets(op["route"])
+            fields = ({"start_lat": op["lat"], "start_lon": op["lon"]} if end == "start"
+                      else {"end_lat": op["lat"], "end_lon": op["lon"]})
+            trips = [replace(t, route=pts, **fields) if t.raw_row == row else t
+                     for t in trips]
     return trips
+
+
+def _points_from_triplets(triplets: list) -> list:
+    """RoutePoints from ``[[lat, lon, iso_ts], ...]`` -- a `manual_reposition`
+    op's precomputed, complete final route. Mirrors the raw file's routes-cell
+    triplet shape, but travels as a plain JSON list (from decisions.jsonl), not
+    a string, so no `ast.literal_eval` round-trip is needed here."""
+    return [RoutePoint(float(lat), float(lon), parse_ts(ts)) for lat, lon, ts in triplets]
 
 
 def _retime_route(route: list, start_ts, end_ts, raw_row: int) -> list:

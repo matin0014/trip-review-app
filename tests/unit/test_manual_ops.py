@@ -372,3 +372,59 @@ def test_reverted_add_edits_do_not_leak_onto_a_later_add(person="A"):
     new_add = [t for t in trips if t.raw_row == add_row(3)][0]
     assert new_add.start_ts == at(60) and new_add.end_ts == at(75)
     assert new_add.mode == "Auto Driver" and new_add.purpose == "Social"
+
+
+# --- reposition -------------------------------------------------------------
+
+def _triplets(pts):
+    """[[lat, lon, iso_ts], ...] -- the JSON-safe shape manual_reposition stores
+    (mirrors what the real server handler would precompute)."""
+    return [[p.lat, p.lon, p.ts.isoformat()] for p in pts]
+
+
+def test_reposition_end_replaces_route_and_endpoint():
+    # kept breadcrumbs (0..5 min) + a patch reaching the new farther-away point
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
+    patch = [RoutePoint(0.0, 6.0, at(6)), RoutePoint(0.0, 9.0, at(10))]
+    t = mk(1, 0, 10, route=kept)
+    op = {"type": "manual_reposition", "raw_row": 1, "end": "end",
+          "lat": 0.0, "lon": 9.0, "route": _triplets(kept + patch)}
+    out = apply_manual_ops([t], [op])[0]
+    assert (out.end_lat, out.end_lon) == (0.0, 9.0)
+    assert len(out.route) == 8  # 6 kept + 2 patch
+    assert out.route[0].lon == 0.0 and out.route[-1].lon == 9.0
+    assert out.start_lat == 0.0 and out.start_lon == 0.0  # untouched
+
+
+def test_reposition_start_replaces_route_and_endpoint():
+    patch = [RoutePoint(0.0, -3.0, at(0)), RoutePoint(0.0, -1.0, at(2))]
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(4, 11)]
+    t = mk(1, 0, 10, route=kept)
+    op = {"type": "manual_reposition", "raw_row": 1, "end": "start",
+          "lat": 0.0, "lon": -3.0, "route": _triplets(patch + kept)}
+    out = apply_manual_ops([t], [op])[0]
+    assert (out.start_lat, out.start_lon) == (0.0, -3.0)
+    assert out.end_lat == 0.0 and out.end_lon == 0.0  # untouched (mk()'s default)
+
+
+def test_reposition_only_touches_the_targeted_row():
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
+    t1, t2 = mk(1, 0, 10, route=kept), mk(2, 12, 20)
+    op = {"type": "manual_reposition", "raw_row": 1, "end": "end",
+          "lat": 1.0, "lon": 1.0, "route": _triplets(kept)}
+    out = apply_manual_ops([t1, t2], [op])
+    assert [t.raw_row for t in out] == [1, 2]
+    assert out[1].end_lat == 0.0 and out[1].end_lon == 0.0  # trip 2 untouched
+
+
+def test_reposition_is_idempotent():
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
+    patch = [RoutePoint(0.0, 6.0, at(6)), RoutePoint(0.0, 9.0, at(10))]
+    full_route = _triplets(kept + patch)
+    op = {"type": "manual_reposition", "raw_row": 1, "end": "end",
+          "lat": 0.0, "lon": 9.0, "route": full_route}
+    trips = [mk(1, 0, 10, route=kept)]
+    for _ in range(3):   # re-applied every fixpoint round -- must not re-append the patch
+        trips = apply_manual_ops(trips, [op])
+    assert len(trips[0].route) == 8
+    assert (trips[0].end_lat, trips[0].end_lon) == (0.0, 9.0)

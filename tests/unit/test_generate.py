@@ -40,7 +40,7 @@ def conflict_day():
 def test_manual_mode_override_for_a_kept_trip():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]
     op = {"type": "manual_mode", "raw_row": 2, "mode": "Bike", "day_key": "p|2024-11-05"}
-    *_, mode_overrides, _times, _purp, _merge = clean_day(trips, set(), day_ops=[op])
+    *_, mode_overrides, _times, _purp, _merge, _pos = clean_day(trips, set(), day_ops=[op])
     assert mode_overrides == {2: "Bike"}
 
 
@@ -48,21 +48,21 @@ def test_manual_mode_on_merged_trip_relabels_all_members():
     # accept the fragment so rows 1 and 2 share an M-id, then relabel the group
     trips = conflict_day()
     ops = [{"type": "manual_mode", "raw_row": 1, "mode": "Bike", "day_key": "p|2024-11-05"}]
-    *_, mode_overrides, _times, _purp, _merge = clean_day(trips, {fid(trips, "fragment")}, day_ops=ops)
+    *_, mode_overrides, _times, _purp, _merge, _pos = clean_day(trips, {fid(trips, "fragment")}, day_ops=ops)
     assert mode_overrides == {1: "Bike", 2: "Bike"}   # both members, option (b)
 
 
 def test_manual_purpose_override_for_a_kept_trip():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]
     op = {"type": "manual_purpose", "raw_row": 2, "purpose": "Work", "day_key": "p|2024-11-05"}
-    *_, purpose_overrides, _merge = clean_day(trips, set(), day_ops=[op])
+    *_, purpose_overrides, _merge, _pos = clean_day(trips, set(), day_ops=[op])
     assert purpose_overrides == {2: "Work"}
 
 
 def test_manual_purpose_on_merged_trip_relabels_all_members():
     trips = conflict_day()
     ops = [{"type": "manual_purpose", "raw_row": 1, "purpose": "Work", "day_key": "p|2024-11-05"}]
-    *_, purpose_overrides, _merge = clean_day(trips, {fid(trips, "fragment")}, day_ops=ops)
+    *_, purpose_overrides, _merge, _pos = clean_day(trips, {fid(trips, "fragment")}, day_ops=ops)
     assert purpose_overrides == {1: "Work", 2: "Work"}   # both members, option (b)
 
 
@@ -125,7 +125,7 @@ def test_manual_split_yields_s_a_row_b_extra_and_override():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0)]
     op = {"type": "manual_split", "raw_row": 1, "day_key": "p|2024-11-05",
           "split_ts": "2024-11-05T12:00:50", "mode_a": "Walk", "mode_b": "Auto"}
-    rows, extras, _surf, overrides, _modes, _times, _purp, _merge = clean_day(trips, set(), day_ops=[op])
+    rows, extras, _surf, overrides, _modes, _times, _purp, _merge, _pos = clean_day(trips, set(), day_ops=[op])
 
     assert rows == [(1, "S1-A")]                  # origin row kept as the A piece
     assert 1 in overrides and overrides[1].mode == "Walk"   # truncated A overwrite
@@ -150,7 +150,7 @@ def test_manual_time_override_for_a_kept_trip():
     trips = [leg(1, 30, 0, 5, 0.0, 0.0), leg(2, 30, 7, 12, 100.0, 150.0)]
     op = {"type": "manual_time", "raw_row": 2, "day_key": "p|2024-11-05",
           "start_ts": "2024-11-05T08:30:00", "end_ts": "2024-11-05T08:45:00"}
-    *_, time_overrides, _purp, _merge = clean_day(trips, set(), day_ops=[op])
+    *_, time_overrides, _purp, _merge, _pos = clean_day(trips, set(), day_ops=[op])
     assert time_overrides == {2: ("2024-11-05T08:30:00", "2024-11-05T08:45:00")}
 
 

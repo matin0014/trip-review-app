@@ -37,7 +37,7 @@ from engine.proposals import _make_stub, split_b_row
 def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
               params=DEFAULT) -> tuple:
     """Return ``(rows, extras, surfaced, overrides, mode_overrides, time_overrides,
-    purpose_overrides)`` for one day.
+    purpose_overrides, merge_overrides, position_overrides)`` for one day.
 
     `rows` = ``[(raw_row, trip_id), ...]`` in chronological order, removed rows
     excluded. `extras` = synthesized rows the caller appends, as
@@ -161,6 +161,21 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             if lt is not None:
                 merge_overrides[root] = lt
 
+    # Manual reposition -> overwrite the row's endpoint + route from the live
+    # (already-repositioned) trip. Only for PLAIN kept rows: a row that is ALSO
+    # part of a merge or a split-A already gets its live trip's endpoint/route
+    # through merge_overrides/overrides above, and those are built from the same
+    # live_by_row (so already reflect the reposition) -- adding it here too would
+    # just be a redundant, order-dependent second override of the same columns.
+    position_overrides: dict = {}
+    for op in day_ops:
+        if op.get("type") == "manual_reposition":
+            r = op["raw_row"]
+            if r not in merged_root and r not in split_origins:
+                lt = live_by_row.get(r)
+                if lt is not None:
+                    position_overrides[r] = lt
+
     rows: list = []
     overrides: dict = {}
     for t in sorted(day_trips, key=lambda x: x.start_ts):
@@ -193,7 +208,7 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
             if a is not None and b is not None:
                 extras.append(("review", f.left[0], _make_stub(a, b, -1)))
     return (rows, extras, surfaced, overrides, mode_overrides, time_overrides,
-            purpose_overrides, merge_overrides)
+            purpose_overrides, merge_overrides, position_overrides)
 
 
 def _write_atomic_xlsx(df, out: str) -> None:
@@ -332,6 +347,25 @@ def _apply_time_overrides(df, time_overrides: dict) -> None:
             _set_cell(df, i, col, v)
 
 
+def _apply_position_overrides(df, position_overrides: dict) -> None:
+    """Overwrite a repositioned row's endpoint + route (raw_row = df position +
+    1; out-of-range rows skipped) with its live (already-repositioned) trip's
+    values. `clean_day` only populates this for plain kept rows -- a merged or
+    split-A row's live endpoint/route already flows through
+    `_apply_merge_overrides`/`_apply_split_a_overrides`, so there is no overlap."""
+    for raw_row, t in position_overrides.items():
+        i = raw_row - 1
+        if not (0 <= i < len(df)):
+            continue
+        vals = {
+            "start_latitude": t.start_lat, "start_longitude": t.start_lon,
+            "end_latitude": t.end_lat, "end_longitude": t.end_lon,
+            "routes": _route_cell(t.route),
+        }
+        for col, v in vals.items():
+            _set_cell(df, i, col, v)
+
+
 def _merge_drop_rows(tid: dict) -> set:
     """The extra workbook legs to drop from the cleaned file so each merge group is
     ONE row: for every ``M<root>`` id shared by 2+ workbook rows, keep the lowest and
@@ -374,8 +408,10 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                     all_ops: list = None, excluded: set = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
     overrides, mode_overrides, time_overrides, purpose_overrides, excluded_rows,
-    merge_overrides)``. ``merge_overrides`` = {kept merge row: live merged trip},
-    cleaned-only, folds every leg (incl. an added one) into the one kept row.
+    merge_overrides, position_overrides)``. ``merge_overrides`` = {kept merge
+    row: live merged trip}, cleaned-only, folds every leg (incl. an added one)
+    into the one kept row. ``position_overrides`` = {raw_row: live trip} from
+    manual repositions (plain kept rows only -- see `clean_day`).
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
@@ -402,6 +438,7 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     time_overrides: dict = {}
     purpose_overrides: dict = {}
     merge_overrides: dict = {}
+    position_overrides: dict = {}
     excluded_rows: set = set()
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
@@ -413,7 +450,8 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
             continue
         day_ops = [op for op in (all_ops or []) if op.get("day_key") == day_key]
         (rows, day_extras, surfaced, day_overrides, day_mode_overrides,
-         day_time_overrides, day_purpose_overrides, day_merge_overrides) = clean_day(
+         day_time_overrides, day_purpose_overrides, day_merge_overrides,
+         day_position_overrides) = clean_day(
             day_trips, accepted_ids, day_ops=day_ops, params=params)
         present = {r for r, _ in rows}
         for r, t in rows:
@@ -425,6 +463,7 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         time_overrides.update(day_time_overrides)
         purpose_overrides.update(day_purpose_overrides)
         merge_overrides.update(day_merge_overrides)
+        position_overrides.update(day_position_overrides)
         if res_map is not None:
             for f in surfaced:
                 tag = f"{f.flag_type}:{res_map.get(f.flag_id, 'pending')}"
@@ -432,7 +471,8 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                 for r in touched:
                     flag_by_row[r].append(tag)
     return (tid, removed, extras, flag_by_row, overrides, mode_overrides,
-            time_overrides, purpose_overrides, excluded_rows, merge_overrides)
+            time_overrides, purpose_overrides, excluded_rows, merge_overrides,
+            position_overrides)
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
@@ -447,10 +487,11 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
     (tid, removed, extras, _, overrides, mode_overrides, time_overrides,
-     purpose_overrides, excluded_rows, merge_overrides) = project_dataset(
+     purpose_overrides, excluded_rows, merge_overrides, position_overrides) = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_merge_overrides(df, merge_overrides)  # kept merge row -> whole-trip end/route/mode/purpose
+    _apply_position_overrides(df, position_overrides)  # repositioned row -> new endpoint/route
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes (win over the merge default)
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes (win over merge default)
@@ -543,11 +584,14 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     import pandas as pd
 
     df = pd.read_excel(raw_path).reset_index(drop=True)
-    # merge_overrides is cleaned-only (the Do-file keeps every leg untouched).
+    # merge_overrides is cleaned-only (the Do-file keeps every leg untouched);
+    # position_overrides applies here too, same as mode/time/purpose -- a
+    # reposition is a data correction the audit ledger should show.
     (tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides,
-     purpose_overrides, excluded_rows, _merge_overrides) = project_dataset(
+     purpose_overrides, excluded_rows, _merge_overrides, position_overrides) = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops, excluded=excluded)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
+    _apply_position_overrides(df, position_overrides)  # repositioned row -> new endpoint/route
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
