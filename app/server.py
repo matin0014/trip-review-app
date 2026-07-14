@@ -57,6 +57,22 @@ def _fmt_ref(rng) -> "str | None":
     return f"~{lo} km/h" if lo == hi else f"~{lo} to {hi} km/h"
 
 
+def _estimate_duration_min(mode: str, distance_m: float) -> "float | None":
+    """Suggested travel time (minutes) for a manual add: distance / the mode's
+    canonical reference speed (the SAME _REF_SPEED_KMH yardstick shown to the
+    reviewer elsewhere), using the midpoint of its (low, high) km/h range.
+    Deliberately NOT OSRM's own duration estimate -- OSRM only has foot/bike/
+    driving profiles, so it would score a SkyTrain trip as if it were a car on
+    that road route. None when the mode has no reference speed or the two
+    points coincide (distance 0), so the caller leaves the end time blank
+    rather than guessing."""
+    rng = _REF_SPEED_KMH.get(mode)
+    if not rng or distance_m <= 0:
+        return None
+    avg_speed_kmh = (rng[0] + rng[1]) / 2
+    return (distance_m / 1000.0) / avg_speed_kmh * 60.0
+
+
 def _mode_speeds(sid: str) -> list:
     """Reference speed per travel mode PRESENT in the workbook.
 
@@ -328,6 +344,33 @@ def create_app() -> Flask:
             "mode_a": body.get("mode_a"), "mode_b": body.get("mode_b"),
             "day_key": day_key})
         return _state(sid)
+
+    @app.get("/api/route_estimate")
+    def api_route_estimate():
+        """Suggested duration for a manual-add's end-time field: real routed
+        distance (OSRM, falling back to straight-line if unreachable) divided by
+        the mode's canonical reference speed. A pure calculation endpoint (no
+        session/day needed) -- the frontend adds `duration_min` to the start time
+        it already has to get a suggested (editable) end time."""
+        mode = request.args.get("mode", "")
+        try:
+            s_lat = float(request.args["start_lat"])
+            s_lon = float(request.args["start_lon"])
+            e_lat = float(request.args["end_lat"])
+            e_lon = float(request.args["end_lon"])
+        except (KeyError, ValueError):
+            abort(400, "require start_lat, start_lon, end_lat, end_lon")
+
+        distance_m = routing.osrm_distance_m(s_lat, s_lon, e_lat, e_lon, mode)
+        routed = distance_m is not None
+        if distance_m is None:
+            distance_m = routing.straight_line_distance_m(s_lat, s_lon, e_lat, e_lon)
+        duration_min = _estimate_duration_min(mode, distance_m)
+        return jsonify({
+            "distance_m": round(distance_m, 1),
+            "routed": routed,
+            "duration_min": round(duration_min, 1) if duration_min is not None else None,
+        })
 
     @app.post("/api/<sid>/manual_add")
     def api_manual_add(sid):

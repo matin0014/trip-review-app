@@ -28,22 +28,56 @@ function updateAddBar(){
    : (n===0 ? 'Click the trip start on the map' : 'Click the trip end on the map');
  $('addForm').style.display = ready ? '' : 'none';
 }
+
+// End time starts as an auto-filled SUGGESTION (real routed distance / the
+// mode's canonical reference speed -- see server._estimate_duration_min); the
+// moment the reviewer types into the end-time field themselves, it becomes
+// theirs and stops being overwritten by further suggestions. The distance
+// display, unlike the end-time suggestion, always shows once both points are
+// placed -- it doesn't depend on a start time being typed yet or on whether
+// the reviewer has taken over the end-time field.
+let addEndAuto = true;
+function fmtDistance(m){
+ return m<1000 ? `${Math.round(m)} m` : `${(m/1000).toFixed(1)} km`;
+}
+async function updateRouteInfo(){
+ if(S.addPts.length<2) return;
+ const [s,en] = S.addPts;
+ const q = new URLSearchParams({mode:$('addMode').value,
+   start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
+ let data;
+ try{ data = await (await fetch(`/api/route_estimate?${q}`)).json(); }
+ catch(e){ $('addDistance').textContent=''; return; }  // offline/network hiccup
+ $('addDistance').textContent = data.distance_m==null ? '' : fmtDistance(data.distance_m);
+
+ if(!addEndAuto) return;
+ const st = $('addStartTime').value;
+ if(!st || data.duration_min==null) return;
+ const [h,m] = st.split(':').map(Number);
+ const total = (h*60 + m + Math.round(data.duration_min)) % (24*60);
+ $('addEndTime').value = `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+}
+
 function addPoint(ll){
  if(S.addPts.length>=2) return;          // two points already placed; finish in the form
  S.addPts.push([ll.lat, ll.lng]);
  S.render(false); updateAddBar();
+ if(S.addPts.length===2) updateRouteInfo();
 }
 map.on('click', e=>{if(S.addMode) addPoint(e.latlng);});
 
 $('bAdd').onclick = ()=>{
  S.mergeMode=false; S.mergeSelected=new Set();
- S.addMode=true; S.addPts=[];
+ S.addMode=true; S.addPts=[]; addEndAuto=true;
  $('addMode').innerHTML = modeOptions('Walk');
  $('addPurpose').innerHTML = purposeOptions('');
- $('addStartTime').value=''; $('addEndTime').value='';
+ $('addStartTime').value=''; $('addEndTime').value=''; $('addDistance').textContent='';
  $('addBar').style.display=''; updateAddBar(); S.render(false);
 };
 $('bAddCancel').onclick = exitAdd;
+$('addStartTime').oninput = updateRouteInfo;
+$('addEndTime').oninput = ()=>{addEndAuto=false;};
+$('addMode').onchange = updateRouteInfo;  // different mode -> different route/speed -> re-estimate
 $('bAddCommit').onclick = ()=>{
  const st=$('addStartTime').value, et=$('addEndTime').value;
  if(S.addPts.length<2 || !st || !et){alert('Place start & end points and set both times.'); return;}
