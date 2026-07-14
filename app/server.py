@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 
 from app import baseline, decisions, generate, regions, routing, session, state
 from engine.classify import classify_all
+from engine.proposals import _route_from_coords
 from engine.loader import load_socio, load_trips
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
@@ -55,6 +57,22 @@ def _fmt_ref(rng) -> "str | None":
         return None
     lo, hi = rng
     return f"~{lo} km/h" if lo == hi else f"~{lo} to {hi} km/h"
+
+
+def _estimate_duration_min(mode: str, distance_m: float) -> "float | None":
+    """Suggested travel time (minutes) for a manual add: distance / the mode's
+    canonical reference speed (the SAME _REF_SPEED_KMH yardstick shown to the
+    reviewer elsewhere), using the midpoint of its (low, high) km/h range.
+    Deliberately NOT OSRM's own duration estimate -- OSRM only has foot/bike/
+    driving profiles, so it would score a SkyTrain trip as if it were a car on
+    that road route. None when the mode has no reference speed or the two
+    points coincide (distance 0), so the caller leaves the end time blank
+    rather than guessing."""
+    rng = _REF_SPEED_KMH.get(mode)
+    if not rng or distance_m <= 0:
+        return None
+    avg_speed_kmh = (rng[0] + rng[1]) / 2
+    return (distance_m / 1000.0) / avg_speed_kmh * 60.0
 
 
 def _mode_speeds(sid: str) -> list:
@@ -100,6 +118,45 @@ def _region_status(sid: str) -> tuple:
     return auto_out, excluded
 
 
+def _build_reposition_route(trip, end: str, lat: float, lon: float) -> list:
+    """The trip's COMPLETE final route after moving its `end` ("start" or
+    "end") point to (lat, lon): existing breadcrumbs are KEPT untouched, and a
+    fresh OSRM patch fills the gap between the kept portion and the new point
+    (falling back to no patch -- a straight line, via the existing mapview
+    start/end-marker convention -- if OSRM is unreachable, same graceful
+    degradation as everywhere else this app calls OSRM). Only the position
+    changes; the trip's start_ts/end_ts are untouched, so the patch's
+    timestamps are squeezed into whatever window sits between the kept portion
+    and the trip's own (fixed) start/end instant.
+
+    Returns ``[[lat, lon, iso_ts], ...]``, ready to store in a
+    `manual_reposition` op -- see `engine.proposals.apply_manual_ops`, which
+    just overwrites the trip's route with this precomputed value every round.
+    """
+    route = trip.route
+    if end == "end":
+        if route:
+            anchor_lat, anchor_lon, window_start = route[-1].lat, route[-1].lon, route[-1].ts
+        else:
+            anchor_lat, anchor_lon, window_start = trip.start_lat, trip.start_lon, trip.start_ts
+        coords = routing.osrm_route(anchor_lat, anchor_lon, lat, lon, trip.mode)
+        patch = _route_from_coords(coords, window_start, trip.end_ts) if coords else []
+        if route and patch:
+            patch = patch[1:]  # drop the leading point (duplicates the last kept breadcrumb)
+        combined = list(route) + patch
+    else:
+        if route:
+            anchor_lat, anchor_lon, window_end = route[0].lat, route[0].lon, route[0].ts
+        else:
+            anchor_lat, anchor_lon, window_end = trip.end_lat, trip.end_lon, trip.end_ts
+        coords = routing.osrm_route(lat, lon, anchor_lat, anchor_lon, trip.mode)
+        patch = _route_from_coords(coords, trip.start_ts, window_end) if coords else []
+        if route and patch:
+            patch = patch[:-1]  # drop the trailing point (duplicates the first kept breadcrumb)
+        combined = patch + list(route)
+    return [[p.lat, p.lon, p.ts.isoformat()] for p in combined]
+
+
 def _combine_dt(day_key: str, hms: str) -> str:
     """Rebuild a naive ISO instant from a day_key's date and an ``HH:MM[:SS]``
     time typed in the UI (the engine attaches the day's timezone)."""
@@ -108,6 +165,33 @@ def _combine_dt(day_key: str, hms: str) -> str:
     if hms.count(":") == 1:
         hms = f"{hms}:00"
     return f"{date}T{hms}"
+
+
+def _time_conflict(sid: str, day_key: str, start_ts: str, end_ts: str):
+    """The first LIVE trip on this day whose window overlaps ``[start_ts,
+    end_ts]`` (both naive ISO strings sharing the day_key's date), or None if
+    there's no conflict -- blocks a manual add that would double-book the
+    person. Overlap is strict: one trip ending exactly when another starts is
+    NOT a conflict, that's an ordinary back-to-back day. `state.day_trips`
+    returning None (unknown day) or an empty live day both mean nothing to
+    conflict with."""
+    trips = state.day_trips(sid, day_key)
+    if not trips:
+        return None
+    events = session.read_events(sid)
+    accepted = {fid for fid, r in decisions.resolutions(events).items()
+                if r in decisions.APPLY_RESOLUTIONS}
+    ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
+    live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
+    if not live_trips:
+        return None
+    tz = live_trips[0].start_ts.tzinfo
+    s = datetime.fromisoformat(start_ts).replace(tzinfo=tz)
+    e = datetime.fromisoformat(end_ts).replace(tzinfo=tz)
+    for t in live_trips:
+        if s < t.end_ts and t.start_ts < e:
+            return t
+    return None
 
 
 def _next_add_seq(sid: str, day_key: str) -> int:
@@ -329,6 +413,33 @@ def create_app() -> Flask:
             "day_key": day_key})
         return _state(sid)
 
+    @app.get("/api/route_estimate")
+    def api_route_estimate():
+        """Suggested duration for a manual-add's end-time field: real routed
+        distance (OSRM, falling back to straight-line if unreachable) divided by
+        the mode's canonical reference speed. A pure calculation endpoint (no
+        session/day needed) -- the frontend adds `duration_min` to the start time
+        it already has to get a suggested (editable) end time."""
+        mode = request.args.get("mode", "")
+        try:
+            s_lat = float(request.args["start_lat"])
+            s_lon = float(request.args["start_lon"])
+            e_lat = float(request.args["end_lat"])
+            e_lon = float(request.args["end_lon"])
+        except (KeyError, ValueError):
+            abort(400, "require start_lat, start_lon, end_lat, end_lon")
+
+        distance_m = routing.osrm_distance_m(s_lat, s_lon, e_lat, e_lon, mode)
+        routed = distance_m is not None
+        if distance_m is None:
+            distance_m = routing.straight_line_distance_m(s_lat, s_lon, e_lat, e_lon)
+        duration_min = _estimate_duration_min(mode, distance_m)
+        return jsonify({
+            "distance_m": round(distance_m, 1),
+            "routed": routed,
+            "duration_min": round(duration_min, 1) if duration_min is not None else None,
+        })
+
     @app.post("/api/<sid>/manual_add")
     def api_manual_add(sid):
         if not session.exists(sid):
@@ -343,6 +454,10 @@ def create_app() -> Flask:
         end_ts = _combine_dt(day_key, body["end_time"])
         if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
             abort(400, "end time must be after start time")
+        conflict = _time_conflict(sid, day_key, start_ts, end_ts)
+        if conflict is not None:
+            abort(400, f"overlaps an existing trip "
+                       f"({conflict.start_ts.strftime('%H:%M')}-{conflict.end_ts.strftime('%H:%M')})")
         s_lat, s_lon = float(body["start_lat"]), float(body["start_lon"])
         e_lat, e_lon = float(body["end_lat"]), float(body["end_lon"])
         mode = body.get("mode") or "Unknown"
@@ -377,6 +492,41 @@ def create_app() -> Flask:
         session.append_event(sid, {
             "type": "manual_time", "raw_row": int(raw_row),
             "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
+        return _state(sid)
+
+    @app.post("/api/<sid>/manual_reposition")
+    def api_manual_reposition(sid):
+        """Move one trip's start or end point. Precomputes the COMPLETE final
+        route ONCE here (kept breadcrumbs + a fresh OSRM patch to the new point)
+        and stores that whole value in the op, so the pure engine's replay is a
+        stable overwrite every fixpoint round -- see `_build_reposition_route`."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        raw_row, day_key, end = body.get("raw_row"), body.get("day_key"), body.get("end")
+        if raw_row is None or not day_key or end not in ("start", "end"):
+            abort(400, "require raw_row, day_key, end ('start' or 'end')")
+        try:
+            lat, lon = float(body["lat"]), float(body["lon"])
+        except (KeyError, TypeError, ValueError):
+            abort(400, "require lat, lon")
+
+        trips = state.day_trips(sid, day_key)
+        if not trips:
+            abort(404, "unknown day")
+        events = session.read_events(sid)
+        accepted = {fid for fid, r in decisions.resolutions(events).items()
+                    if r in decisions.APPLY_RESOLUTIONS}
+        ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
+        live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
+        target = next((t for t in live_trips if t.raw_row == int(raw_row)), None)
+        if target is None:
+            abort(404, "unknown trip")
+
+        route_triplets = _build_reposition_route(target, end, lat, lon)
+        session.append_event(sid, {
+            "type": "manual_reposition", "raw_row": int(raw_row), "end": end,
+            "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key})
         return _state(sid)
 
     @app.post("/api/<sid>/day_include")

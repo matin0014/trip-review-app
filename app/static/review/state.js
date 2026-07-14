@@ -28,5 +28,6 @@ export const S = {
   mergeSelected: new Set(),// raw_rows (t.id) chosen for merge
   addMode: false,          // are we placing a new (manual_add) trip?
   addPts: [],              // [[lat,lon], ...] clicked while adding (start, then end)
+  repositioning: null,     // {rawRow, end} while waiting for a map click to move a trip's start/end
   render: null,            // (fit) => void — assigned by app.js
 };

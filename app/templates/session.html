@@ -67,12 +67,17 @@
    <div id="addBar" class="merge-bar" style="display:none">
     <span id="addHint">Click the trip start on the map</span>
     <span id="addForm" style="display:none">
+     <span class="aux" id="addDistance"></span>
      <input id="addStartTime" type="time"> – <input id="addEndTime" type="time">
      <select id="addMode"></select>
      <select id="addPurpose"></select>
      <button id="bAddCommit" class="act apply">Add</button>
     </span>
     <button id="bAddCancel">Cancel</button>
+   </div>
+   <div id="repositionBar" class="merge-bar" style="display:none">
+    <span id="repositionHint">Click the map to set the new location</span>
+    <button id="bRepositionCancel">Cancel</button>
    </div>
    <div id="trips"></div>
    <div class="overline insp-sec">

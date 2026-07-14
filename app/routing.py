@@ -1,4 +1,5 @@
-"""OSM shortest-path routing for hand-added trips (display + export geometry).
+"""OSM shortest-path routing for hand-added trips (display + export geometry),
+and route-distance estimation for the manual-add end-time suggestion.
 
 A ``manual_add`` places a trip from two clicked endpoints with no GPS breadcrumbs,
 so it would otherwise draw as a straight line. To follow real streets we ask the
@@ -7,6 +8,12 @@ public OSRM server for the shortest path between the endpoints ONCE, at add time
 and export then stay deterministic and offline, and the pure `engine/` never makes
 a network call. Any routing failure degrades gracefully to ``[]`` (the straight
 line), exactly as before this feature.
+
+The SAME lookup also yields the route's real street-following distance, used to
+suggest an end time (distance / a canonical per-mode speed, NOT OSRM's own
+duration estimate -- see `server._REF_SPEED_KMH`'s docstring for why: OSRM only
+has foot/bike/driving profiles, so its own duration would score a SkyTrain trip
+as if it were a car on that road route).
 """
 
 from __future__ import annotations
@@ -16,11 +23,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 
+from engine.geo import haversine_m
 from engine.proposals import _route_from_coords
 
 OSRM = "https://router.project-osrm.org/route/v1"
 _TIMEOUT_S = 8
-_CACHE: dict = {}  # (profile, rounded coords) -> [[lat, lon], ...]
+_CACHE: dict = {}  # (profile, rounded coords) -> {"coords": [[lat,lon],...], "distance_m": float|None}
 
 
 def _profiles(mode: str) -> tuple:
@@ -33,32 +41,60 @@ def _profiles(mode: str) -> tuple:
     return ("driving",)
 
 
-def osrm_route(start_lat: float, start_lon: float, end_lat: float, end_lon: float,
-               mode: str = "") -> list:
-    """Shortest-path ``[[lat, lon], ...]`` between two points, or ``[]`` on any
-    failure (network error, timeout, no route). Cached in-process per endpoint."""
+def _lookup(start_lat: float, start_lon: float, end_lat: float, end_lon: float,
+           mode: str) -> dict:
+    """The cached ``{"coords", "distance_m"}`` for the first profile (in mode
+    priority order) that yields a route; ``{"coords": [], "distance_m": None}``
+    if every profile fails."""
     for profile in dict.fromkeys(_profiles(mode)):
         key = (profile, round(start_lat, 6), round(start_lon, 6),
                round(end_lat, 6), round(end_lon, 6))
         if key not in _CACHE:
             _CACHE[key] = _query(profile, start_lat, start_lon, end_lat, end_lon)
-        if _CACHE[key]:
+        if _CACHE[key]["coords"]:
             return _CACHE[key]
-    return []
+    return {"coords": [], "distance_m": None}
+
+
+def osrm_route(start_lat: float, start_lon: float, end_lat: float, end_lon: float,
+               mode: str = "") -> list:
+    """Shortest-path ``[[lat, lon], ...]`` between two points, or ``[]`` on any
+    failure (network error, timeout, no route). Cached in-process per endpoint."""
+    return _lookup(start_lat, start_lon, end_lat, end_lon, mode)["coords"]
+
+
+def osrm_distance_m(start_lat: float, start_lon: float, end_lat: float, end_lon: float,
+                    mode: str = "") -> "float | None":
+    """The real street-following distance (metres) of the same shortest path
+    `osrm_route` would draw, or None on any routing failure. Shares `osrm_route`'s
+    cache, so computing both for the same add costs exactly one network call."""
+    return _lookup(start_lat, start_lon, end_lat, end_lon, mode)["distance_m"]
+
+
+def straight_line_distance_m(start_lat: float, start_lon: float,
+                             end_lat: float, end_lon: float) -> float:
+    """Haversine fallback distance when OSRM is unreachable -- always available,
+    never fails, just less accurate than a real routed path."""
+    return haversine_m(start_lat, start_lon, end_lat, end_lon)
 
 
 def _query(profile: str, start_lat: float, start_lon: float,
-           end_lat: float, end_lon: float) -> list:
+           end_lat: float, end_lon: float) -> dict:
     q = urllib.parse.urlencode({"overview": "full", "geometries": "geojson"})
     url = f"{OSRM}/{profile}/{start_lon},{start_lat};{end_lon},{end_lat}?{q}"
     try:
         with urllib.request.urlopen(url, timeout=_TIMEOUT_S) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        return []
+        return {"coords": [], "distance_m": None}
     routes = data.get("routes") or []
-    coords = routes[0].get("geometry", {}).get("coordinates", []) if routes else []
-    return [[float(lat), float(lon)] for lon, lat in coords]  # OSRM yields [lon, lat]
+    if not routes:
+        return {"coords": [], "distance_m": None}
+    coords = routes[0].get("geometry", {}).get("coordinates", [])
+    return {
+        "coords": [[float(lat), float(lon)] for lon, lat in coords],  # OSRM yields [lon, lat]
+        "distance_m": routes[0].get("distance"),
+    }
 
 
 def route_trip(t):

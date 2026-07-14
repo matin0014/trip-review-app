@@ -61,6 +61,10 @@ function detailHTML(t){
   _row('Displacement (start→end)', fmtDist(t.disp_m))+
   _row('First GPS point', t.r0_t || 'n/a')+
   _row('Last GPS point', t.rN_t || 'n/a')+
+  `<div class="drow reposition-act">`+
+   `<button class="act reposition-btn" data-end="start">Change start position</button>`+
+   `<button class="act reposition-btn" data-end="end">Change end position</button>`+
+  `</div>`+
  `</div>`;
 }
 
@@ -141,6 +145,8 @@ export function renderTrips(){
     if(e.target.closest('.tm-cancel')){ S.timeOpen=false; S.render(); return; }
     if(e.target.closest('.time-toggle')){ S.timeOpen=!S.timeOpen; S.render(); return; }
     if(e.target.closest('.time-edit')) return;   // clicks inside the inputs don't collapse the detail
+    const repBtn = e.target.closest('.reposition-btn');
+    if(repBtn){ S.startReposition(t.id, repBtn.dataset.end); return; }
     const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.render();
    };
   }

@@ -419,6 +419,34 @@ def test_recovering_an_out_of_region_day_re_includes_it(tmp_path, monkeypatch):
     assert "excluded" not in set(dofile["status"])
 
 
+# --- reposition -------------------------------------------------------------
+
+def test_reposition_survives_into_the_export(tmp_path, monkeypatch):
+    # a plain kept trip's end point moved, with a real kept-breadcrumbs + patch
+    # route (as the server would precompute) -- both cleaned.xlsx and dofile.xlsx
+    # must show the NEW endpoint/route, not the original raw values.
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    new_route = [
+        [49.260, -123.120, f"{DATE}T{_ts('09:00:00')}"],
+        [49.278, -123.120, f"{DATE}T{_ts('09:10:00')}"],
+        [49.290, -123.100, f"{DATE}T{_ts('09:20:00')}"],   # the new patched point
+    ]
+    session.append_event(sid, {
+        "type": "manual_reposition", "raw_row": 1, "end": "end",
+        "lat": 49.290, "lon": -123.100, "route": new_route, "day_key": DAY_KEY})
+    cleaned, dofile = _export(sid)
+
+    row = cleaned[cleaned["trip_id"].astype(str) == "1"].iloc[0]
+    assert row["end_latitude"] == pytest.approx(49.290)
+    assert row["end_longitude"] == pytest.approx(-123.100)
+    assert row["start_latitude"] == pytest.approx(49.260)  # start untouched
+    assert len(eval(row["routes"])) == 3                   # 2 kept + 1 patch point
+
+    d = dofile[dofile["trip_id"].astype(str) == "1"].iloc[0]
+    assert d["end_latitude"] == pytest.approx(49.290)      # audit ledger shows it too
+    assert d["status"] == "kept"                           # reposition isn't a status change
+
+
 # --- undo -----------------------------------------------------------------
 
 def test_undo_reverts_an_operation(tmp_path, monkeypatch):
