@@ -69,7 +69,19 @@ $('bNone').onclick = ()=>showNone();
 $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 rTo.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
-$('bGenerate').onclick = ()=>{window.location.href = `/api/${window.SID}/generate`;};
+$('bGenerate').onclick = async ()=>{
+ // Inside the desktop app window, a plain download link does nothing (the
+ // embedded view has no browser download UI) -- go through pywebview's own
+ // Save As dialog instead. A plain browser tab (dev/testing) has no
+ // window.pywebview, so it falls back to the old direct-download link.
+ if(window.pywebview && window.pywebview.api){
+  const r = await window.pywebview.api.save_export(window.SID);
+  if(r.ok) alert(`Saved to ${r.path}`);
+  else if(!r.cancelled) alert(`Export failed: ${r.error}`);
+  return;
+ }
+ window.location.href = `/api/${window.SID}/generate`;
+};
 $('bMerge').onclick = ()=>{
  if(S.addMode){S.addMode=false; S.addPts=[]; $('addBar').style.display='none';}
  S.mergeMode=true; S.mergeSelected=new Set(); S.render(false);};

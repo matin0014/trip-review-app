@@ -7,12 +7,14 @@ port so multiple copies don't collide. This is what the PyInstaller exe will run
 
 from __future__ import annotations
 
+import shutil
 import socket
 import threading
 import time
 
 import webview
 
+from app import generate
 from app.server import create_app
 
 
@@ -20,6 +22,34 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+class Api:
+    """Exposed to the page as ``window.pywebview.api`` (see session.html's JS).
+
+    The embedded WebView2 window has NO built-in download handling (unlike a
+    real browser) -- a plain link/navigation to a file-attachment response
+    silently does nothing, which is why "Generate export" stopped working
+    after the switch away from the system browser. The fix is to generate the
+    file server-side as before, then hand it to the user via a native Save As
+    dialog and write the bytes ourselves, instead of relying on any browser
+    download mechanism."""
+
+    def save_export(self, sid: str) -> dict:
+        try:
+            zip_path = generate.generate_bundle(sid)
+        except Exception as exc:  # surface any generation failure to the page, not a silent no-op
+            return {"ok": False, "error": str(exc)}
+
+        result = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename="trip_review_export.zip",
+            file_types=("Zip files (*.zip)",))
+        if not result:
+            return {"ok": False, "cancelled": True}
+
+        dest = result[0] if isinstance(result, (list, tuple)) else result
+        shutil.copyfile(zip_path, dest)
+        return {"ok": True, "path": dest}
 
 
 def _wait_until_listening(port: int, timeout: float = 10.0) -> None:
@@ -52,7 +82,8 @@ def main() -> None:
     _wait_until_listening(port)
 
     print(f"Trip Review Tool running -> {url}")
-    webview.create_window("Trip Review Tool", url, width=1400, height=900, min_size=(900, 600))
+    webview.create_window("Trip Review Tool", url, width=1400, height=900, min_size=(900, 600),
+                          js_api=Api())
     webview.start()
 
 
