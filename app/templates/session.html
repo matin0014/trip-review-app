@@ -62,8 +62,9 @@
    <div id="addBar" class="merge-bar" style="display:none">
     <span id="addHint">Click the trip start on the map</span>
     <span id="addForm" style="display:none">
-     <input id="addStartTime" type="time">
-     <span id="addEndPreview" class="mono"></span>
+     <label class="add-time">Start <input id="addStartTime" type="time"></label>
+     <label class="add-time">End <input id="addEndTime" type="time"></label>
+     <span id="addTimeHint" class="mono"></span>
      <select id="addMode"></select>
      <select id="addPurpose"></select>
      <button id="bAddCommit" class="act apply">Add</button>
@@ -81,6 +82,11 @@
     <span class="rewind"><button id="bResolvedToggle">Show</button></span>
    </div>
    <div id="resolved" style="display:none"></div>
+   <div class="overline insp-sec" id="editedHead" style="display:none">
+    <span>Edited <span class="aux" id="ecount"></span></span>
+    <span class="rewind"><button id="bEditedToggle">Show</button></span>
+   </div>
+   <div id="edited" style="display:none"></div>
   </aside>
  </div>
 </div>

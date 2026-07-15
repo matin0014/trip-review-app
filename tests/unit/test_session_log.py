@@ -29,3 +29,34 @@ def test_log_is_append_only(tmp_path, monkeypatch):
     for i in range(3):
         session.append_event(sid, {"type": "decision", "flag_id": f"f{i}", "resolution": "waive"})
     assert len(session.read_events(sid)) == 3
+
+
+def test_list_sessions_returns_resumable_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    sid = "sess3"
+    session.write_proposals(sid, {
+        "raw_name": "raw.xlsx",
+        "days": {
+            "p1|2026-01-01": {"person": "p1"},
+            "p2|2026-01-02": {"person": "p2"},
+        },
+    })
+    session.append_event(sid, {"type": "manual_delete", "raw_row": 10, "day_key": "p1|2026-01-01"})
+
+    rows = session.list_sessions()
+
+    assert rows == [{
+        "id": sid,
+        "raw_name": "raw.xlsx",
+        "people": 2,
+        "person_days": 2,
+        "events": 1,
+        "updated": rows[0]["updated"],
+    }]
+
+
+def test_list_sessions_ignores_incomplete_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    (tmp_path / "partial").mkdir()
+
+    assert session.list_sessions() == []

@@ -36,6 +36,48 @@ def exists(sid: str) -> bool:
     return os.path.isfile(os.path.join(session_dir(sid), PROPOSALS))
 
 
+def list_sessions(limit: int = 12) -> list:
+    """Recent resumable sessions, newest activity first.
+
+    A session is resumable if its immutable baseline exists. Edits already live in
+    `decisions.jsonl`; this helper just exposes enough metadata for the start page
+    to link back to `/s/<sid>`.
+    """
+    if not os.path.isdir(SESSIONS_DIR):
+        return []
+    out = []
+    for entry in os.scandir(SESSIONS_DIR):
+        if not entry.is_dir():
+            continue
+        sid = entry.name
+        proposals_path = os.path.join(entry.path, PROPOSALS)
+        if not os.path.isfile(proposals_path):
+            continue
+        decisions_path = os.path.join(entry.path, DECISIONS)
+        activity_path = decisions_path if os.path.isfile(decisions_path) else proposals_path
+        try:
+            data = read_proposals(sid)
+            events = read_events(sid)
+            days = data.get("days") or {}
+            people = {d.get("person") for d in days.values() if d.get("person")}
+            mtime = os.path.getmtime(activity_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append({
+            "id": sid,
+            "raw_name": data.get("raw_name") or "uploaded workbook",
+            "people": len(people),
+            "person_days": len(days),
+            "events": len(events),
+            "updated": datetime.fromtimestamp(mtime).isoformat(timespec="minutes"),
+            "_mtime": mtime,
+        })
+    out.sort(key=lambda s: s["_mtime"], reverse=True)
+    for s in out:
+        s.pop("_mtime", None)
+    return out[:limit]
+
+
 def save_upload(sid: str, file_storage) -> str:
     """Persist the uploaded workbook into the session dir; return its path."""
     d = session_dir(sid)

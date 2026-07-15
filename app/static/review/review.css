@@ -93,6 +93,12 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .vis.on{background:var(--cobalt-500);border-color:var(--cobalt-500)}
 .logged{font-family:var(--mono);font-size:10px;font-weight:600;background:var(--ink-900);color:#fff;border-radius:999px;padding:1px 7px;letter-spacing:.02em}
 .detail{margin-top:10px;padding-top:4px}
+.trip-actions{display:flex;gap:6px;margin:2px 0 8px}
+.trip-actions button{font-family:var(--sans);font-size:12px;font-weight:500;border:1px solid var(--paper-300);
+  background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 10px;cursor:pointer}
+.trip-actions button:hover{background:var(--paper-100)}
+.trip-actions .trip-delete:hover{background:rgba(220,60,60,.12);border-color:rgba(220,60,60,.45)}
+.trip-actions .trip-merge:hover{background:rgba(240,192,64,.18);border-color:rgba(240,192,64,.5)}
 .drow{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;font-size:13px;border-top:1px solid var(--paper-200)}
 .drow .k{color:var(--ink-600)}
 .drow .v{font-family:var(--mono);color:var(--ink-950);text-align:right}
@@ -119,6 +125,12 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .fd-verb{font-weight:600;color:var(--ink-800)}
 .empty{padding:14px;color:var(--slate-500);font-size:12px}
 #resolved .flagrow{opacity:.7}
+.editrow{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--paper-200);font-size:12px}
+.editrow__main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;color:var(--ink-700)}
+.editrow__main .mono{font-size:11px;color:var(--slate-500)}
+.editrow button{font-family:var(--sans);font-size:11px;font-weight:500;border:1px solid var(--paper-300);
+  background:var(--paper-0);border-radius:6px;padding:3px 9px;color:var(--ink-600);cursor:pointer}
+.editrow button:hover{background:var(--paper-100);color:var(--ink-900)}
 .flag-actions{display:flex;gap:6px;margin-top:9px}
 .act{font-family:var(--sans);font-size:12px;font-weight:500;border:1px solid var(--paper-300);background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 13px;cursor:pointer}
 .act:hover{background:var(--paper-100)}
@@ -182,4 +194,7 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 #addForm{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 #addForm input,#addForm select{font-family:var(--mono);font-size:12px;padding:2px 5px;
   border:1px solid var(--ink-300);border-radius:5px}
+.add-time{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--ink-600)}
+.add-time input{width:78px}
+#addTimeHint{color:var(--slate-500);font-size:11px}
 #addPurpose{min-width:120px;max-width:180px}

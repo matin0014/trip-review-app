@@ -3,7 +3,7 @@
 
 import {S, map} from './state.js';
 import {drawMap} from './mapview.js';
-import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
+import {renderTrips, renderFlags, renderEdits, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd} from './api.js';
 import {COMMUTE_SPEEDS, MODES, hmToMin, minToHm} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyPlaces, lyFollow, rFrom, rTo} from './dom.js';
@@ -36,19 +36,30 @@ function haversineM(a, b){
  return 2*R*Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-function calculatedAddEnd(){
- const st=$('addStartTime').value;
- if(S.addPts.length<2 || !st) return '';
+let addAnchor = 'start';
+
+function addDurationMin(){
  const mode = commuteMode($('addMode').value);
  const speed = COMMUTE_SPEEDS[mode];
- if(!speed) return '';
- const minutes = (haversineM(S.addPts[0], S.addPts[1]) / 1000) / speed * 60;
- return minToHm(hmToMin(st) + minutes);
+ if(S.addPts.length<2 || !speed) return null;
+ return (haversineM(S.addPts[0], S.addPts[1]) / 1000) / speed * 60;
 }
 
-function updateAddEndPreview(){
- const et = calculatedAddEnd();
- $('addEndPreview').textContent = et ? `ends ${et}` : 'end from mode';
+function fillAddOtherTime(anchor){
+ addAnchor = anchor || addAnchor;
+ const minutes = addDurationMin();
+ const st = $('addStartTime').value;
+ const et = $('addEndTime').value;
+ if(minutes == null){
+  $('addTimeHint').textContent = 'no speed';
+  return;
+ }
+ if(addAnchor === 'end' && et){
+  $('addStartTime').value = minToHm(hmToMin(et) - minutes);
+ }else if(st){
+  $('addEndTime').value = minToHm(hmToMin(st) + minutes);
+ }
+ $('addTimeHint').textContent = `${Math.max(1, Math.round(minutes))} min`;
 }
 
 function routeProfile(mode){
@@ -77,7 +88,7 @@ async function networkRoute(start, end, mode){
 function render(fit){
  if(!S.cur.data) return;
  drawMap(fit);
- renderTrips(); renderFlags(); renderLegend();
+ renderTrips(); renderFlags(); renderEdits(); renderLegend();
 }
 S.render = render;
 
@@ -90,7 +101,7 @@ function updateAddBar(){
  $('addHint').textContent = ready ? 'Set times & mode for the new trip'
    : (n===0 ? 'Click the trip start on the map' : 'Click the trip end on the map');
  $('addForm').style.display = ready ? '' : 'none';
- updateAddEndPreview();
+ fillAddOtherTime(addAnchor);
 }
 function addPoint(ll){
  if(S.addPts.length>=2) return;          // two points already placed; finish in the form
@@ -105,7 +116,9 @@ $('bAdd').onclick = ()=>{
  fillSelect($('addMode'), addModeValues(), 'Walk');
  fillSelect($('addPurpose'), S.purposeOptions, '', '(no purpose)');
  $('addStartTime').value='';
- updateAddEndPreview();
+ $('addEndTime').value='';
+ addAnchor = 'start';
+ fillAddOtherTime(addAnchor);
  $('addBar').style.display=''; updateAddBar(); S.render(false);
 };
 
@@ -116,14 +129,16 @@ window.addEventListener('open-add-trip', e=>{
  fillSelect($('addMode'), addModeValues(), d.mode || 'Auto Driver');
  fillSelect($('addPurpose'), S.purposeOptions, d.purpose || '', '(no purpose)');
  $('addStartTime').value=d.startTime || '';
+ $('addEndTime').value=d.endTime || '';
+ addAnchor = d.endTime && !d.startTime ? 'end' : 'start';
  $('addBar').style.display='';
  updateAddBar();
  S.render(false);
 });
 $('bAddCancel').onclick = exitAdd;
 $('bAddCommit').onclick = async ()=>{
- const st=$('addStartTime').value, et=calculatedAddEnd();
- if(S.addPts.length<2 || !st || !et){alert('Place start & end points, set start time, and choose a mode with a speed.'); return;}
+ const st=$('addStartTime').value, et=$('addEndTime').value;
+ if(S.addPts.length<2 || !st || !et){alert('Place start & end points, then set start and end times.'); return;}
  if(et<=st){alert('End time must be after the start time.'); return;}  // HH:MM is zero-padded, so string compare is chronological
  const [s,en]=S.addPts;
  const mode = commuteMode($('addMode').value);
@@ -133,8 +148,9 @@ $('bAddCommit').onclick = async ()=>{
    start_lat:s[0], start_lon:s[1], end_lat:en[0], end_lon:en[1]});
  exitAdd();
 };
-$('addStartTime').onchange = updateAddEndPreview;
-$('addMode').onchange = updateAddEndPreview;
+$('addStartTime').oninput = ()=>fillAddOtherTime('start');
+$('addEndTime').oninput = ()=>fillAddOtherTime('end');
+$('addMode').onchange = ()=>fillAddOtherTime(addAnchor);
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
@@ -143,6 +159,7 @@ lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');
 $('bResolvedToggle').onclick = ()=>{S.resolvedOpen=!S.resolvedOpen; renderFlags();};
+$('bEditedToggle').onclick = ()=>{S.editsOpen=!S.editsOpen; renderEdits();};
 $('bNone').onclick = ()=>showNone();
 $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));

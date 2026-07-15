@@ -189,13 +189,52 @@ def _combine_dt(day_key: str, hms: str) -> str:
     return f"{date}T{hms}"
 
 
+def _time_part(iso_ts: object) -> str:
+    text = str(iso_ts or "")
+    return text.split("T", 1)[1][:5] if "T" in text else text[:5]
+
+
+def _edit_label(op: dict) -> str:
+    kind = op.get("type")
+    if kind == "manual_delete":
+        return f"Deleted trip row {op.get('raw_row')}"
+    if kind == "manual_merge":
+        return "Merged rows " + ", ".join(str(r) for r in op.get("raw_rows") or [])
+    if kind == "manual_split":
+        return f"Split row {op.get('raw_row')} at {_time_part(op.get('split_ts'))}"
+    if kind == "manual_add":
+        return f"Added trip {_time_part(op.get('start_ts'))}-{_time_part(op.get('end_ts'))}"
+    if kind == "manual_mode":
+        return f"Changed row {op.get('raw_row')} mode to {op.get('mode')}"
+    if kind == "manual_purpose":
+        purpose = op.get("purpose") or "blank"
+        return f"Changed row {op.get('raw_row')} purpose to {purpose}"
+    if kind == "manual_time":
+        return f"Changed row {op.get('raw_row')} time to {_time_part(op.get('start_ts'))}-{_time_part(op.get('end_ts'))}"
+    return kind or "Edit"
+
+
+def _edits_for_day(events: list, day_key: str) -> list:
+    edits = []
+    for op in decisions.manual_ops(events):
+        if op.get("day_key") != day_key:
+            continue
+        edits.append({
+            "seq": op.get("seq"),
+            "type": op.get("type"),
+            "label": _edit_label(op),
+            "ts": op.get("ts", ""),
+        })
+    return edits
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", sessions=session.list_sessions())
 
     @app.post("/upload")
     def upload():
@@ -305,6 +344,7 @@ def create_app() -> Flask:
             "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
             "flags": flags,
             "places": day.get("places", []),
+            "edits": _edits_for_day(all_events, key),
         })
 
     @app.get("/api/<sid>/state")
@@ -447,6 +487,19 @@ def create_app() -> Flask:
         if not session.exists(sid):
             abort(404)
         session.append_event(sid, {"type": "redo"})
+        return _state(sid)
+
+    @app.post("/api/<sid>/undo_event")
+    def api_undo_event(sid):
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        seq = body.get("seq")
+        try:
+            seq = int(seq)
+        except (TypeError, ValueError):
+            abort(400, "require seq")
+        session.append_event(sid, {"type": "undo_event", "target_seq": seq})
         return _state(sid)
 
     @app.get("/api/<sid>/generate")

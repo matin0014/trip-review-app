@@ -215,17 +215,15 @@ if(lyPlaces.checked && d.places){
   d.places.forEach(p=>{
    if(p.lat==null || p.lon==null) return;
    const ll = [p.lat, p.lon], col = p.color || PLACE_COL[p.type] || '#555';
-   const interactive = !S.addMode;
    const circle = L.circle(ll, {
     radius: p.radius_m || 300,
     color: col,
     weight: 2,
     fillColor: col,
     fillOpacity: 0.13,
-    interactive,
+    interactive: false,
    }).addTo(layer);
-   if(interactive) circle.bindPopup(`<b>${_esc(p.label)}</b><br>${_esc(p.address)}<br>${p.radius_m || 300} m buffer`);
-   L.marker(ll, {interactive, icon:L.divIcon({className:'', iconSize:null,
+   L.marker(ll, {interactive:false, icon:L.divIcon({className:'', iconSize:null,
     html:`<div class="flabel" style="background:${col}">${_esc(p.label)}</div>`})}).addTo(layer);
    pts.push(ll);
   });

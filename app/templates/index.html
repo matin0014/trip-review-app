@@ -4,7 +4,7 @@
 <style>
  body{font-family:system-ui,Segoe UI,sans-serif;margin:0;background:#f7f8fa;color:#1f2430;
       display:flex;min-height:100vh;align-items:center;justify-content:center}
- .card{background:#fff;border:1px solid #e4e7ec;border-radius:14px;padding:32px 36px;width:440px;
+ .card{background:#fff;border:1px solid #e4e7ec;border-radius:14px;padding:32px 36px;width:520px;
        box-shadow:0 4px 24px rgba(0,0,0,.05)}
  h1{font-size:20px;margin:0 0 4px}
  p.sub{color:#667085;margin:0 0 22px;font-size:14px}
@@ -17,6 +17,14 @@
         color:#fff;font-size:15px;font-weight:600;cursor:pointer}
  button:disabled{background:#aac4f5;cursor:default}
  input[type=file]{display:none}
+ .resume{margin-top:28px;border-top:1px solid #e4e7ec;padding-top:20px}
+ .resume h2{font-size:13px;margin:0 0 10px;color:#667085;text-transform:uppercase;letter-spacing:.06em}
+ .sess{display:block;text-decoration:none;color:#1f2430;border:1px solid #e4e7ec;border-radius:10px;
+       padding:10px 12px;margin-top:8px}
+ .sess:hover{border-color:#3b82f6;background:#f4f8ff}
+ .sess strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .sess span{display:block;margin-top:3px;color:#667085;font-size:12px}
+ .empty{color:#667085;font-size:13px;margin:0}
 </style></head><body>
 <div class="card">
  <h1>Trip Review Tool</h1>
@@ -29,6 +37,19 @@
   <div id="name"></div>
   <button id="go" type="submit" disabled>Load proposals</button>
  </form>
+ <div class="resume">
+  <h2>Resume session</h2>
+  {% if sessions %}
+   {% for s in sessions %}
+    <a class="sess" href="{{ url_for('review', sid=s.id) }}">
+     <strong>{{ s.raw_name }}</strong>
+     <span>{{ s.events }} edits · {{ s.people }} people · {{ s.person_days }} days · {{ s.updated }}</span>
+    </a>
+   {% endfor %}
+  {% else %}
+   <p class="empty">No saved sessions yet.</p>
+  {% endif %}
+ </div>
 </div>
 <script>
  const drop=document.getElementById('drop'), file=document.getElementById('file'),

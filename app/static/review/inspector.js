@@ -5,7 +5,7 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         MODES, tcol, flagSummary, flagRows, fmtDist} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime} from './api.js';
+import {decide, manualDelete, manualMode, manualPurpose, manualTime, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -68,6 +68,10 @@ function timeRowHTML(t){
 
 function detailHTML(t){
  return `<div class="detail">`+
+  `<div class="trip-actions">`+
+  `<button class="trip-delete" type="button">Delete</button>`+
+  `<button class="trip-merge" type="button">Merge</button>`+
+  `</div>`+
   timeRowHTML(t)+_row('Duration',t.dur+' min')+
   modeRowHTML(t)+
   purposeRowHTML(t)+
@@ -160,6 +164,17 @@ export function renderTrips(){
      st.onclick = e=>e.stopPropagation(); et.onclick = e=>e.stopPropagation();
      st.onchange = commitTime; et.onchange = commitTime;
     }
+    const del = card.querySelector('.trip-delete');
+    if(del) del.onclick = e=>{
+     e.stopPropagation();
+     if(confirm(`Delete trip #${t.seq} (${t.mode}, ${t.start}-${t.end})?`)) manualDelete(t.id, S.cur.key);
+    };
+    const merge = card.querySelector('.trip-merge');
+    if(merge) merge.onclick = e=>{
+     e.stopPropagation();
+     S.mergeMode = true; S.mergeSelected = new Set([t.id]);
+     S.render(false);
+    };
    }
   }
   tripsEl.appendChild(card);
@@ -238,6 +253,35 @@ export function renderFlags(){
  }else{
   head.style.display='none'; rEl.style.display='none'; rEl.innerHTML='';
  }
+}
+
+export function renderEdits(){
+ const edits = S.cur.data.edits || [];
+ const head = $('editedHead'), el = $('edited');
+ if(!edits.length){
+  head.style.display='none'; el.style.display='none'; el.innerHTML='';
+  return;
+ }
+ head.style.display = '';
+ $('ecount').textContent = edits.length;
+ $('bEditedToggle').textContent = S.editsOpen?'Hide':'Show';
+ el.style.display = S.editsOpen?'':'none';
+ el.innerHTML = '';
+ if(!S.editsOpen) return;
+ edits.slice().sort((a,b)=>(a.seq||0)-(b.seq||0)).forEach(edit=>{
+  const row = document.createElement('div');
+  row.className = 'editrow';
+  row.innerHTML = `<div class="editrow__main">`+
+   `<span class="mono">#${esc(edit.seq)}</span>`+
+   `<span>${esc(edit.label)}</span>`+
+   `</div>`+
+   `<button type="button">Undo</button>`;
+  row.querySelector('button').onclick = e=>{
+   e.stopPropagation();
+   if(confirm(`Undo edit #${edit.seq}?`)) undoEdit(edit.seq);
+  };
+  el.appendChild(row);
+ });
 }
 
 export function renderLegend(){
