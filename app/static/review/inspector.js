@@ -5,7 +5,7 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime} from './api.js';
+import {decide, manualMode, manualPurpose, manualTime, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -52,6 +52,10 @@ function timeRowsHTML(t){
 }
 
 function detailHTML(t){
+ // While repositioning THIS trip's start or end, that button becomes "Cancel"
+ // (click it again, or click the map, to leave the mode) -- the other button
+ // still switches the target endpoint if clicked mid-mode.
+ const activeEnd = (S.repositioning && S.repositioning.rawRow===t.id) ? S.repositioning.end : null;
  return `<div class="detail">`+
   timeRowsHTML(t)+_row('Duration',t.dur+' min')+
   modeRowHTML(t)+
@@ -62,9 +66,12 @@ function detailHTML(t){
   _row('First GPS point', t.r0_t || 'n/a')+
   _row('Last GPS point', t.rN_t || 'n/a')+
   `<div class="drow reposition-act">`+
-   `<button class="act reposition-btn" data-end="start">Change start position</button>`+
-   `<button class="act reposition-btn" data-end="end">Change end position</button>`+
+   `<button class="act reposition-btn${activeEnd==='start'?' reposition-cancel':''}" data-end="start">`+
+    `${activeEnd==='start'?'Cancel':'Change start position'}</button>`+
+   `<button class="act reposition-btn${activeEnd==='end'?' reposition-cancel':''}" data-end="end">`+
+    `${activeEnd==='end'?'Cancel':'Change end position'}</button>`+
   `</div>`+
+  (activeEnd ? `<div class="reposition-hint">Click the map to set the new ${activeEnd} location.</div>` : '')+
  `</div>`;
 }
 
@@ -146,7 +153,12 @@ export function renderTrips(){
     if(e.target.closest('.time-toggle')){ S.timeOpen=!S.timeOpen; S.render(); return; }
     if(e.target.closest('.time-edit')) return;   // clicks inside the inputs don't collapse the detail
     const repBtn = e.target.closest('.reposition-btn');
-    if(repBtn){ S.startReposition(t.id, repBtn.dataset.end); return; }
+    if(repBtn){
+     const end = repBtn.dataset.end;
+     const alreadyActive = S.repositioning && S.repositioning.rawRow===t.id && S.repositioning.end===end;
+     alreadyActive ? S.exitReposition() : S.startReposition(t.id, end);
+     return;
+    }
     const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.render();
    };
   }
@@ -218,6 +230,43 @@ export function renderFlags(){
  }else{
   head.style.display='none'; rEl.style.display='none'; rEl.innerHTML='';
  }
+}
+
+// The Edited group: every manual op logged for this day, oldest first, each
+// with its own Undo (targets that ONE op via undo_event, unlike the toolbar
+// Undo/Redo which only pops the most recent action off the LIFO).
+export function renderEdits(){
+ const edits = S.cur.data.edits || [];
+ const head = $('editedHead'), el = $('edited');
+ if(!edits.length){
+  head.style.display='none'; el.style.display='none'; el.innerHTML='';
+  return;
+ }
+ head.style.display = '';
+ $('ecount').textContent = edits.length;
+ $('bEditedToggle').textContent = S.editsOpen?'Hide':'Show';
+ el.style.display = S.editsOpen?'':'none';
+ el.innerHTML = '';
+ if(!S.editsOpen) return;
+ edits.slice().sort((a,b)=>(a.seq||0)-(b.seq||0)).forEach(edit=>{
+  const row = document.createElement('div');
+  row.className = 'editrow';
+  const main = document.createElement('div');
+  main.className = 'editrow__main';
+  const seqSpan = document.createElement('span');
+  seqSpan.className = 'mono'; seqSpan.textContent = `#${edit.seq}`;
+  const labelSpan = document.createElement('span');
+  labelSpan.textContent = edit.label;
+  main.append(seqSpan, labelSpan);
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Undo';
+  btn.onclick = e=>{
+   e.stopPropagation();
+   if(confirm(`Undo edit #${edit.seq}?`)) undoEdit(edit.seq);
+  };
+  row.append(main, btn);
+  el.appendChild(row);
+ });
 }
 
 export function renderLegend(){

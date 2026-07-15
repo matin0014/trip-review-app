@@ -121,7 +121,7 @@ export function refreshDays(){
 // keep=true preserves the current show/hide + selection across a decision
 // (a fresh day load resets them). fit=true re-frames the map (day/person switch).
 export function loadDay(fit=true, keep=false){
- if(!keep){S.hidden=new Set(); S.sel=null; S.resolvedOpen=false;}
+ if(!keep){S.hidden=new Set(); S.sel=null; S.resolvedOpen=false; S.editsOpen=false;}
  fetch(`/api/${SID}/live-day?key=`+encodeURIComponent(S.cur.key)).then(r=>r.json()).then(d=>{
   S.cur.data = d;
   // keep the day dropdown's ⚠ badge in sync with the live pending count
@@ -152,6 +152,10 @@ export function decide(flagId, resolution){
    body:JSON.stringify({flag_id:flagId, resolution})}).then(()=>loadDay(false,true));
 }
 export function rewind(path){fetch(`/api/${SID}/${path}`, {method:'POST'}).then(()=>loadDay(false,true));}
+export function undoEdit(seq){
+ fetch(`/api/${SID}/undo_event`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({seq})}).then(()=>loadDay(false,true));
+}
 
 export function manualDelete(rawRow, dayKey){
  fetch(`/api/${SID}/manual_delete`, {method:'POST', headers:{'Content-Type':'application/json'},

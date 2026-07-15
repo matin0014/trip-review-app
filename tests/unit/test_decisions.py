@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.decisions import day_overrides, excluded_days, replay
+from app.decisions import day_overrides, excluded_days, manual_ops, replay
 
 
 def dec(flag_id, resolution):
@@ -102,3 +102,42 @@ def test_day_overrides_ignores_revert_redo():
     # day_include is a sticky setting, OUT of the undo/redo LIFO: a revert must not
     # silently re-add a day the reviewer pulled.
     assert day_overrides([inc("p|d1", False), REVERT]) == {"p|d1": False}
+
+
+# --- undo_event: targeted undo of one specific edit, by its log serial ------
+
+def test_targeted_undo_removes_one_decision_by_serial():
+    events = [
+        {"seq": 1, **dec("a", "accept")},
+        {"seq": 2, **dec("b", "accept")},
+        {"type": "undo_event", "target_seq": 1},
+    ]
+    assert replay(events) == {"b"}
+
+
+def test_targeted_undo_removes_one_manual_edit_by_serial():
+    events = [
+        {"seq": 1, "type": "manual_mode", "raw_row": 1, "mode": "Walk", "day_key": "p|2026-01-01"},
+        {"seq": 2, "type": "manual_delete", "raw_row": 2, "day_key": "p|2026-01-01"},
+        {"type": "undo_event", "target_seq": 2},
+    ]
+    assert [e["seq"] for e in manual_ops(events)] == [1]
+
+
+def test_targeted_undo_leaves_a_later_untargeted_edit_active():
+    # undoing an OLDER edit must not disturb a later one still in effect --
+    # this is the whole point of undo_event over the plain LIFO /undo.
+    events = [
+        {"seq": 1, "type": "manual_mode", "raw_row": 1, "mode": "Walk", "day_key": "p|2026-01-01"},
+        {"seq": 2, "type": "manual_mode", "raw_row": 2, "mode": "Bike", "day_key": "p|2026-01-01"},
+        {"type": "undo_event", "target_seq": 1},
+    ]
+    assert [e["seq"] for e in manual_ops(events)] == [2]
+
+
+def test_targeted_undo_of_a_missing_seq_is_a_noop():
+    events = [
+        {"seq": 1, **dec("a", "accept")},
+        {"type": "undo_event", "target_seq": 99},
+    ]
+    assert replay(events) == {"a"}

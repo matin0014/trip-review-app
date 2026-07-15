@@ -3,7 +3,7 @@
 
 import {S, map} from './state.js';
 import {drawMap, regionBounds} from './mapview.js';
-import {renderTrips, renderFlags, renderLegend, setRange, showNone} from './inspector.js';
+import {renderTrips, renderFlags, renderEdits, renderLegend, setRange, showNone} from './inspector.js';
 import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd, manualReposition} from './api.js';
 import {modeOptions, purposeOptions} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, lyRegions, rFrom, rTo} from './dom.js';
@@ -14,7 +14,7 @@ const $ = id => document.getElementById(id);
 function render(fit){
  if(!S.cur.data) return;
  drawMap(fit);
- renderTrips(); renderFlags(); renderLegend();
+ renderTrips(); renderFlags(); renderEdits(); renderLegend();
 }
 S.render = render;
 
@@ -81,7 +81,10 @@ function addPoint(ll){
 
 // --- Reposition mode: pick "change start/end" on a trip, then click the map
 // once to set the new point. One click, no separate commit step.
-function exitReposition(){ S.repositioning=null; $('repositionBar').style.display='none'; }
+function exitReposition(){
+ S.repositioning=null; $('repositionBar').style.display='none'; S.render(false);
+}
+S.exitReposition = exitReposition;
 S.startReposition = (rawRow, end)=>{
  if(S.addMode){S.addMode=false; S.addPts=[]; $('addBar').style.display='none';}
  if(S.mergeMode){S.mergeMode=false; S.mergeSelected=new Set();}
@@ -136,6 +139,7 @@ lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');
 $('bResolvedToggle').onclick = ()=>{S.resolvedOpen=!S.resolvedOpen; renderFlags();};
+$('bEditedToggle').onclick = ()=>{S.editsOpen=!S.editsOpen; renderEdits();};
 $('bNone').onclick = ()=>showNone();
 $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
