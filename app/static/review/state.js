@@ -24,6 +24,7 @@ export const S = {
   selId: null,             // selected trip's raw_row (stable id, survives renumber)
   followSel: true,         // keep the selection on its trip across an action
   resolvedOpen: false,     // is the Resolved group expanded
+  editsOpen: false,        // is the Edited group expanded
   mergeMode: false,        // are we in trip-merge selection mode?
   mergeSelected: new Set(),// raw_rows (t.id) chosen for merge
   addMode: false,          // are we placing a new (manual_add) trip?

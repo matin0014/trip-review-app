@@ -39,7 +39,9 @@ def _active_events(events: list) -> list:
     """Shared undo/redo machinery: the events currently in effect, in order.
 
     ``decision`` and ``manual_*`` events are pushed by default and popped by
-    ``revert``/``redo``. A fresh decision also clears the redo stack.
+    ``revert``/``redo``. ``undo_event`` removes one active event by its stored
+    serial number (a targeted undo from the edits list, not the LIFO stack). A
+    fresh decision also clears the redo stack.
     """
     active: list = []
     redo: list = []
@@ -47,6 +49,10 @@ def _active_events(events: list) -> list:
         kind = e.get("type")
         if kind == "decision" or kind in _MANUAL_TYPES:
             active.append(e)
+            redo.clear()
+        elif kind == "undo_event":
+            target = e.get("target_seq")
+            active = [a for a in active if a.get("seq") != target]
             redo.clear()
         elif kind == "revert":
             if active:

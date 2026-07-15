@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app import session
-from app.server import _combine_dt, _estimate_duration_min, _next_add_seq
+from app.server import _combine_dt, _edit_label, _edits_for_day, _estimate_duration_min, _next_add_seq
 
 
 def test_combine_dt_pads_seconds_when_only_hh_mm():
@@ -84,3 +84,35 @@ def test_estimate_duration_none_for_a_mode_with_no_reference_speed():
 
 def test_estimate_duration_none_for_zero_distance():
     assert _estimate_duration_min("Walk", 0) is None
+
+
+# --- _edit_label / _edits_for_day --------------------------------------------
+
+def test_edit_label_covers_every_manual_op_type():
+    assert _edit_label({"type": "manual_delete", "raw_row": 3}) == "Deleted trip row 3"
+    assert _edit_label({"type": "manual_merge", "raw_rows": [1, 2]}) == "Merged rows 1, 2"
+    assert _edit_label({"type": "manual_split", "raw_row": 1,
+                         "split_ts": "2024-11-05T12:00:50"}) == "Split row 1 at 12:00"
+    assert _edit_label({"type": "manual_add", "start_ts": "2024-11-05T13:00:00",
+                         "end_ts": "2024-11-05T13:10:00"}) == "Added trip 13:00-13:10"
+    assert _edit_label({"type": "manual_mode", "raw_row": 2, "mode": "Bike"}) == "Changed row 2 mode to Bike"
+    assert _edit_label({"type": "manual_purpose", "raw_row": 2, "purpose": "Work"}) == \
+        "Changed row 2 purpose to Work"
+    assert _edit_label({"type": "manual_purpose", "raw_row": 2, "purpose": ""}) == \
+        "Changed row 2 purpose to blank"
+    assert _edit_label({"type": "manual_time", "raw_row": 2, "start_ts": "2024-11-05T08:30:00",
+                         "end_ts": "2024-11-05T08:45:00"}) == "Changed row 2 time to 08:30-08:45"
+    assert _edit_label({"type": "manual_reposition", "raw_row": 2, "end": "start"}) == \
+        "Moved row 2's start point"
+    assert _edit_label({"type": "something_new"}) == "something_new"
+
+
+def test_edits_for_day_only_includes_the_requested_day_and_carries_seq():
+    events = [
+        {"seq": 1, "type": "manual_delete", "raw_row": 1, "day_key": "p|2024-11-05"},
+        {"seq": 2, "type": "manual_delete", "raw_row": 2, "day_key": "p|2024-11-06"},
+    ]
+    edits = _edits_for_day(events, "p|2024-11-05")
+    assert len(edits) == 1
+    assert edits[0]["seq"] == 1 and edits[0]["type"] == "manual_delete"
+    assert edits[0]["label"] == "Deleted trip row 1"

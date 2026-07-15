@@ -204,6 +204,50 @@ def _next_add_seq(sid: str, day_key: str) -> int:
                    if e.get("type") == "manual_add" and e.get("day_key") == day_key)
 
 
+def _time_part(iso_ts: object) -> str:
+    text = str(iso_ts or "")
+    return text.split("T", 1)[1][:5] if "T" in text else text[:5]
+
+
+def _edit_label(op: dict) -> str:
+    """Human-readable one-liner for one manual op, shown in the day's Edited list."""
+    kind = op.get("type")
+    if kind == "manual_delete":
+        return f"Deleted trip row {op.get('raw_row')}"
+    if kind == "manual_merge":
+        return "Merged rows " + ", ".join(str(r) for r in op.get("raw_rows") or [])
+    if kind == "manual_split":
+        return f"Split row {op.get('raw_row')} at {_time_part(op.get('split_ts'))}"
+    if kind == "manual_add":
+        return f"Added trip {_time_part(op.get('start_ts'))}-{_time_part(op.get('end_ts'))}"
+    if kind == "manual_mode":
+        return f"Changed row {op.get('raw_row')} mode to {op.get('mode')}"
+    if kind == "manual_purpose":
+        purpose = op.get("purpose") or "blank"
+        return f"Changed row {op.get('raw_row')} purpose to {purpose}"
+    if kind == "manual_time":
+        return f"Changed row {op.get('raw_row')} time to {_time_part(op.get('start_ts'))}-{_time_part(op.get('end_ts'))}"
+    if kind == "manual_reposition":
+        return f"Moved row {op.get('raw_row')}'s {op.get('end')} point"
+    return kind or "Edit"
+
+
+def _edits_for_day(events: list, day_key: str) -> list:
+    """The day's manual edits in log order, each tagged with its serial number
+    so the UI's Undo button can target one specific edit via `undo_event`."""
+    edits = []
+    for op in decisions.manual_ops(events):
+        if op.get("day_key") != day_key:
+            continue
+        edits.append({
+            "seq": op.get("seq"),
+            "type": op.get("type"),
+            "label": _edit_label(op),
+            "ts": op.get("ts", ""),
+        })
+    return edits
+
+
 def create_app() -> Flask:
     base = _app_dir()
     app = Flask(__name__, template_folder=os.path.join(base, "templates"),
@@ -327,6 +371,7 @@ def create_app() -> Flask:
         return jsonify({
             "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
             "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
+            "edits": _edits_for_day(all_events, key),
         })
 
     @app.get("/api/<sid>/state")
@@ -553,6 +598,22 @@ def create_app() -> Flask:
         if not session.exists(sid):
             abort(404)
         session.append_event(sid, {"type": "redo"})
+        return _state(sid)
+
+    @app.post("/api/<sid>/undo_event")
+    def api_undo_event(sid):
+        """Undo one specific edit from the day's Edited list, by its log serial
+        number -- unlike /undo (which only pops the most recent action), this
+        can remove an older edit while later ones stay in effect."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        seq = body.get("seq")
+        try:
+            seq = int(seq)
+        except (TypeError, ValueError):
+            abort(400, "require seq")
+        session.append_event(sid, {"type": "undo_event", "target_seq": seq})
         return _state(sid)
 
     @app.get("/api/<sid>/generate")
