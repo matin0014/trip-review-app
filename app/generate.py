@@ -21,6 +21,7 @@ means a zero_move on a merged piece does NOT remove it. Pure given
 from __future__ import annotations
 
 import os
+import re
 import zipfile
 from collections import defaultdict
 from datetime import datetime
@@ -263,14 +264,30 @@ def _route_cell(route) -> str:
     return repr([[round(p.lat, 6), round(p.lon, 6), p.ts.isoformat()] for p in route])
 
 
+_TZ_SUFFIX = re.compile(r"([+-]\d{2}:\d{2})$")
+
+
+def _fmt_time(dt, original=None) -> str:
+    """A time-of-day cell in the workbook's own style (offset-carrying, e.g.
+    ``10:20:00.999000-08:00``), so an overwritten cell doesn't leave the column
+    with two formats: a tz-aware datetime brings its own offset; a naive one (a
+    manual time edit is typed offset-less in the UI) inherits the offset of the
+    `original` cell value it overwrites, or stays bare if that had none."""
+    if dt.utcoffset() is not None:
+        return dt.isoformat().split("T", 1)[1]
+    m = _TZ_SUFFIX.search(str(original if original is not None else ""))
+    return dt.time().isoformat() + (m.group(1) if m else "")
+
+
 def _stub_row(stub) -> dict:
     """Map a stub `Trip` onto the raw column names (others left blank)."""
     return {
         "accessCode": stub.person,
         "start_date": stub.start_ts.strftime("%Y-%m-%d"),
-        "start_time": stub.start_ts.strftime("%H:%M:%S"),
+        "start_time": _fmt_time(stub.start_ts),
         "end_date": stub.end_ts.strftime("%Y-%m-%d"),
-        "end_time": stub.end_ts.strftime("%H:%M:%S"),
+        "end_time": _fmt_time(stub.end_ts),
+        "time_duration": str(stub.end_ts - stub.start_ts),
         "mode_of_travel": stub.mode,
         "purpose_of_travel": stub.purpose,
         "start_latitude": stub.start_lat, "start_longitude": stub.start_lon,
@@ -293,17 +310,21 @@ def _set_cell(df, i: int, col: str, v) -> None:
 
 def _apply_split_a_overrides(df, overrides: dict) -> None:
     """Overwrite each kept split-origin row to describe the truncated A piece
-    (its end time / endpoint / mode / purpose) instead of the full original trip,
-    so the ``S<n>-A`` and ``S<n>-B`` rows do not double-count the span. raw_row =
-    df position + 1; missing columns are skipped. The original `routes` cell is
-    left intact (the A breadcrumbs are a subset of it)."""
+    (its end time / BOTH endpoints / mode / purpose) instead of the full original
+    trip, so the ``S<n>-A`` and ``S<n>-B`` rows do not double-count the span.
+    The start point is written too (normally a no-op) so a reposition made before
+    the split isn't lost. ``time_duration`` is recomputed for the truncated span.
+    raw_row = df position + 1; missing columns are skipped. The original `routes`
+    cell is left intact (the A breadcrumbs are a subset of it)."""
     for raw_row, a in overrides.items():
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
         vals = {
             "end_date": a.end_ts.strftime("%Y-%m-%d"),
-            "end_time": a.end_ts.strftime("%H:%M:%S"),
+            "end_time": _fmt_time(a.end_ts),
+            "time_duration": str(a.end_ts - a.start_ts),
+            "start_latitude": a.start_lat, "start_longitude": a.start_lon,
             "end_latitude": a.end_lat, "end_longitude": a.end_lon,
             "mode_of_travel": a.mode, "purpose_of_travel": a.purpose,
         }
@@ -333,15 +354,20 @@ def _apply_time_overrides(df, time_overrides: dict) -> None:
     """Overwrite the start/end date+time columns for rows whose times the reviewer
     edited by hand (raw_row = df position + 1; out-of-range rows skipped). The op
     stores naive ISO instants (``YYYY-MM-DDTHH:MM:SS``); they are split back into
-    the workbook's separate date / time columns, each only if that column exists."""
+    the workbook's separate date / time columns (each only if it exists), keeping
+    the overwritten cell's UTC-offset style, and ``time_duration`` is recomputed."""
     for raw_row, (start_iso, end_iso) in time_overrides.items():
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
         sdt, edt = datetime.fromisoformat(start_iso), datetime.fromisoformat(end_iso)
+        old = lambda col: df.at[i, col] if col in df.columns else None
         vals = {
-            "start_date": sdt.strftime("%Y-%m-%d"), "start_time": sdt.strftime("%H:%M:%S"),
-            "end_date": edt.strftime("%Y-%m-%d"), "end_time": edt.strftime("%H:%M:%S"),
+            "start_date": sdt.strftime("%Y-%m-%d"),
+            "start_time": _fmt_time(sdt, old("start_time")),
+            "end_date": edt.strftime("%Y-%m-%d"),
+            "end_time": _fmt_time(edt, old("end_time")),
+            "time_duration": str(edt - sdt),
         }
         for col, v in vals.items():
             _set_cell(df, i, col, v)
@@ -386,16 +412,21 @@ def _apply_merge_overrides(df, merge_overrides: dict) -> None:
     """Overwrite each kept merge row (raw_row = df position + 1) to describe the WHOLE
     merged trip, exactly as the viewer shows it: end date/time/endpoint, concatenated
     route, AND mode + purpose all come from the live merged trip (which takes the LAST
-    leg's mode/purpose, per engine `_merge_group`); only the start stays the first
-    leg's. This folds an added leg (no workbook row) into the single kept row. Applied
-    BEFORE the manual mode/purpose/time overrides so an explicit hand-edit still wins."""
+    leg's mode/purpose, per engine `_merge_group`); the start TIME stays the first
+    leg's, but the start POINT is written from the live trip too, so a reposition of
+    the first leg's start isn't lost (a no-op when it was never moved). The stale raw
+    ``time_duration`` is recomputed for the merged span. This folds an added leg (no
+    workbook row) into the single kept row. Applied BEFORE the manual
+    mode/purpose/time overrides so an explicit hand-edit still wins."""
     for raw_row, t in merge_overrides.items():
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
         vals = {
             "end_date": t.end_ts.strftime("%Y-%m-%d"),
-            "end_time": t.end_ts.strftime("%H:%M:%S"),
+            "end_time": _fmt_time(t.end_ts),
+            "time_duration": str(t.end_ts - t.start_ts),
+            "start_latitude": t.start_lat, "start_longitude": t.start_lon,
             "end_latitude": t.end_lat, "end_longitude": t.end_lon,
             "routes": _route_cell(t.route),
             "mode_of_travel": t.mode, "purpose_of_travel": t.purpose,
@@ -621,6 +652,7 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
             row["flags"] = _EXTRA_FLAG[kind]
             added.append(row)
         df = pd.concat([df, pd.DataFrame(added, columns=cols)], ignore_index=True)
+        df = _sort_chronologically(df)  # slot A/Q/split rows into their real spot
     return df
 
 
