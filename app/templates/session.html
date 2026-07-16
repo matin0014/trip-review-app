@@ -15,6 +15,8 @@
   <div class="crumb" id="crumb"></div>
   <div class="topbar__right">
    <span id="dataset"></span>
+   <button id="bHome" class="genbtn ghostbtn">Home</button>
+   <button id="bCharts" class="genbtn ghostbtn">Start times</button>
    <button id="bGenerate" class="genbtn">Generate export</button>
   </div>
  </header>
@@ -96,6 +98,23 @@
    </div>
    <div id="edited" style="display:none"></div>
   </aside>
+ </div>
+</div>
+<div class="modal" id="chartsModal" style="display:none">
+ <div class="modal-box modal-box--chart">
+  <div class="chart-head">
+   <h2>Trip start times</h2>
+   <div class="chart-tools">
+    <span class="chart-toggle">
+     <button id="chartModeAll" class="chart-mode on" type="button">All days</button>
+     <button id="chartModeWeekday" class="chart-mode" type="button">Weekdays only</button>
+    </span>
+    <button id="bChartsClose" class="chart-close" type="button">Close</button>
+   </div>
+  </div>
+  <p class="chart-sub">Trips by start hour: raw workbook vs your cleaned data so far.
+   Updates as you review while this panel is open.</p>
+  <div id="chartSvg" class="chart-svg"></div>
  </div>
 </div>
 <script>window.SID = "{{ sid }}";</script>

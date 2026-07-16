@@ -26,7 +26,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime
 
-from app import metrics, regions, routing, session
+from app import charts, metrics, regions, routing, session
 from app.decisions import excluded_days, fixpoint, manual_ops, replay, resolutions
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
@@ -685,13 +685,31 @@ def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     return cleaned, dofile
 
 
+def _start_time_png_paths(sid: str) -> list:
+    """The two QC start-time PNGs for the export, written into the session dir.
+    Charts are a bonus deliverable: any failure here (matplotlib missing or
+    broken in a stripped build) must never block the export itself, so the
+    caller treats an empty list as "zip without charts"."""
+    raw_path = os.path.join(session.session_dir(sid), session.read_proposals(sid)["raw_name"])
+    days = {f"{p}|{d}": t for (p, d), t in group_person_days(load_trips(raw_path)).items()}
+    series = charts.start_time_series(days, session.read_events(sid))
+    return charts.write_start_time_pngs(series, session.session_dir(sid))
+
+
 def generate_bundle(sid: str, params=DEFAULT) -> str:
-    """Write cleaned.xlsx + dofile.xlsx and zip them; return the zip path."""
+    """Write cleaned.xlsx + dofile.xlsx (+ the two start-time chart PNGs) and
+    zip them; return the zip path."""
     cleaned, dofile = generate_cleaned_and_dofile(sid, params)
+    try:
+        pngs = _start_time_png_paths(sid)
+    except Exception:
+        pngs = []  # charts must never block the export
     out = os.path.abspath(os.path.join(session.session_dir(sid), "export.zip"))
     tmp = out + ".tmp"
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(cleaned, "cleaned.xlsx")
         z.write(dofile, "dofile.xlsx")
+        for p in pngs:
+            z.write(p, os.path.basename(p))
     os.replace(tmp, out)
     return out

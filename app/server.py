@@ -15,7 +15,7 @@ from datetime import datetime
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 
-from app import baseline, decisions, generate, regions, routing, session, state
+from app import baseline, charts, decisions, generate, regions, routing, session, state
 from engine.classify import classify_all
 from engine.proposals import _route_from_coords
 from engine.loader import load_socio, load_trips
@@ -615,6 +615,17 @@ def create_app() -> Flask:
             abort(400, "require seq")
         session.append_event(sid, {"type": "undo_event", "target_seq": seq})
         return _state(sid)
+
+    @app.get("/api/<sid>/start_times")
+    def api_start_times(sid):
+        """Start-time distribution, raw vs the session's LIVE cleaned state, both
+        variants (all days / weekdays only) in one response so the panel's toggle
+        needs no second fetch. Recomputed per call from the cached trips + the
+        decision log -- same live projection the viewer shows."""
+        if not session.exists(sid):
+            abort(404)
+        return jsonify(charts.start_time_series(state.all_days(sid),
+                                                session.read_events(sid)))
 
     @app.get("/api/<sid>/generate")
     def api_generate(sid):
