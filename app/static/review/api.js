@@ -4,6 +4,7 @@
 import {S, SID} from './state.js';
 import {personSel, daySel, rFrom, rTo} from './dom.js';
 import {weekday, personInfoHTML} from './constants.js';
+import {chartsMaybeRefresh} from './charts.js';
 
 const $ = id => document.getElementById(id);
 
@@ -144,6 +145,7 @@ export function loadDay(fit=true, keep=false){
     `<span class="mono">${S.cur.key.split('|')[1]}</span><span class="sep">·</span>${d.trips.length} trips`;
   $('personinfo').innerHTML = personInfoHTML(S.people[S.cur.person]);
   S.render(fit);   // fit only on a fresh day load, never after an action
+  chartsMaybeRefresh();   // start-times panel follows along while open
  });
 }
 

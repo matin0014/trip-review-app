@@ -24,14 +24,15 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Dev/analysis-only deps: never imported by launch.py's import graph,
-        # excluded explicitly to keep the build lean.
-        'matplotlib',
+        # Dev-only deps: never imported by launch.py's import graph, excluded
+        # explicitly to keep the build lean. matplotlib + PIL are NOT excluded:
+        # app/charts.py renders the export's start-time PNGs with matplotlib
+        # (Agg), and matplotlib >= 3.3 writes PNGs through Pillow. tkinter
+        # stays excluded -- the Agg backend never touches it.
         'pytest',
         'tkinter',
         'IPython',
         'scipy',
-        'PIL',
     ],
     noarchive=False,
     optimize=0,
