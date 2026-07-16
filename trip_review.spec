@@ -51,6 +51,10 @@ exe = EXE(
     strip=False,
     upx=False,
     console=True,  # keep the console: launch.py prints the URL, Ctrl+C stops it
+    # UiTR lab logo as the exe resource: Explorer, taskbar, and the console
+    # window all read their icon from here (replaces the default PyInstaller
+    # python icon).
+    icon='app/static/favicon.ico',
 )
 
 coll = COLLECT(
