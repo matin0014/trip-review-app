@@ -39,9 +39,11 @@ export const REGION_BOXES = [
 
 // Canonical wave2 travel modes for the split/add dropdowns. The engine accepts any
 // string (it keys on measured speed, not the label); an unknown original mode is
-// prepended at render time so it stays selectable.
+// prepended at render time so it stays selectable. Labels must match the survey
+// vocabulary exactly: "Transit Bus" (never "Bus"), and no "Ferry" (the wave2
+// dataset has none; the water mode it does have is "SeaBus").
 export const MODES = ["Walk","Run","Bike","Auto Driver","Auto Passenger","Taxi",
-  "Bus","SkyTrain","Ferry","Other","Unknown"];
+  "Transit Bus","SkyTrain","Other","Unknown"];
 
 // Canonical wave2 trip purposes for the purpose dropdown / add form. As with
 // modes the engine never reads the label, so any value is accepted; an unknown
