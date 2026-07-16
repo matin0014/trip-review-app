@@ -136,6 +136,9 @@ $('dayFilter').onchange = ()=>{S.dayFilter=$('dayFilter').value; fillDays();};
 // Showing the region boxes zooms out to them (at a day's zoom the edges are off-screen).
 lyRegions.onchange = ()=>{ if(lyRegions.checked) map.fitBounds(regionBounds(), {padding:[30,30]}); render(); };
 lyFollow.onchange = ()=>{S.followSel=lyFollow.checked;};
+// Back to the start page (upload + resume-session list). Edits are already
+// safe: every action is appended to the session log the moment it happens.
+$('bHome').onclick = ()=>{ window.location.href = '/'; };
 $('bUndo').onclick = ()=>rewind('undo');
 $('bRedo').onclick = ()=>rewind('redo');
 $('bResolvedToggle').onclick = ()=>{S.resolvedOpen=!S.resolvedOpen; renderFlags();};
