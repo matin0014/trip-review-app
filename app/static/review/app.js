@@ -4,7 +4,7 @@
 import {S, map} from './state.js';
 import {drawMap, regionBounds} from './mapview.js';
 import {renderTrips, renderFlags, renderEdits, renderLegend, setRange, showNone} from './inspector.js';
-import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd, manualReposition} from './api.js';
+import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd, manualReposition, setDayCleaned} from './api.js';
 import {modeOptions, purposeOptions} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, lyRegions, rFrom, rTo} from './dom.js';
 
@@ -131,6 +131,7 @@ $('bAddCommit').onclick = ()=>{
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
+$('dayCleaned').onchange = ()=>setDayCleaned(S.cur.key, $('dayCleaned').checked);
 $('dayFilter').onchange = ()=>{S.dayFilter=$('dayFilter').value; fillDays();};
 [lyTrips, lyStraight, lyFlags, lyEnds, lyHome].forEach(c=>c.onchange=render);
 // Showing the region boxes zooms out to them (at a day's zoom the edges are off-screen).

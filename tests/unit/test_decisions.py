@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.decisions import day_overrides, excluded_days, manual_ops, replay
+from app.decisions import cleaned_days, day_overrides, excluded_days, manual_ops, replay
 
 
 def dec(flag_id, resolution):
@@ -102,6 +102,30 @@ def test_day_overrides_ignores_revert_redo():
     # day_include is a sticky setting, OUT of the undo/redo LIFO: a revert must not
     # silently re-add a day the reviewer pulled.
     assert day_overrides([inc("p|d1", False), REVERT]) == {"p|d1": False}
+
+
+# --- day_cleaned: the reviewer's manual "done" checkbox per day -------------
+
+def cln(day_key, cleaned):
+    return {"type": "day_cleaned", "day_key": day_key, "cleaned": cleaned}
+
+
+def test_no_events_means_no_day_is_cleaned():
+    assert cleaned_days([]) == {}
+
+
+def test_checking_a_day_marks_it_cleaned():
+    assert cleaned_days([cln("p|d1", True)]) == {"p|d1": True}
+
+
+def test_unchecking_is_last_event_wins():
+    assert cleaned_days([cln("p|d1", True), cln("p|d1", False)]) == {"p|d1": False}
+
+
+def test_cleaned_days_ignores_revert_redo():
+    # sticky, like day_include: a flag-level revert must not silently un-check
+    # a day the reviewer marked done.
+    assert cleaned_days([cln("p|d1", True), REVERT]) == {"p|d1": True}
 
 
 # --- undo_event: targeted undo of one specific edit, by its log serial ------

@@ -97,6 +97,20 @@ def day_overrides(events: list) -> dict:
     return overrides
 
 
+def cleaned_days(events: list) -> dict:
+    """Effective per-day "marked as cleaned" flag, ``{day_key: bool}`` (last-event-wins).
+
+    A ``day_cleaned`` event records the reviewer's explicit checkbox for ONE
+    person-day. Sticky, like ``day_include``: kept OUT of the undo/redo LIFO so a
+    flag-level revert never silently un-checks a day the reviewer marked done.
+    Days never checked are absent (callers treat that as not-cleaned)."""
+    cleaned: dict = {}
+    for e in events:
+        if e.get("type") == "day_cleaned":
+            cleaned[e["day_key"]] = bool(e["cleaned"])
+    return cleaned
+
+
 def excluded_days(events: list, auto_out: set) -> set:
     """The ``day_key``s dropped from the cleaned export. ``auto_out`` is the set of
     out-of-region days (auto-removed by default). A day is excluded when it is

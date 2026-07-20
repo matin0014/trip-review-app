@@ -316,10 +316,12 @@ def create_app() -> Flask:
         data = session.read_proposals(sid)
         pending = _live_pending_counts(sid)
         auto_out, excluded = _region_status(sid)
+        cleaned = decisions.cleaned_days(session.read_events(sid))
         days = [
             {"key": k, "person": v["person"], "date": v["date"],
              "n_trips": len(v["trips"]), "n_flags": pending.get(k, 0),
-             "out_of_region": k in auto_out, "excluded": k in excluded}
+             "out_of_region": k in auto_out, "excluded": k in excluded,
+             "cleaned": cleaned.get(k, False)}
             for k, v in data["days"].items()
         ]
         days.sort(key=lambda d: (d["person"], d["date"]))
@@ -586,6 +588,20 @@ def create_app() -> Flask:
             abort(400, "require day_key and include (bool)")
         session.append_event(sid, {"type": "day_include", "day_key": day_key,
                                    "include": include})
+        return _state(sid)
+
+    @app.post("/api/<sid>/day_cleaned")
+    def api_day_cleaned(sid):
+        """Reviewer's manual "cleaned" checkbox for one person-day. Sticky, like
+        day_include -- see `decisions.cleaned_days`."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key, cleaned = body.get("day_key"), body.get("cleaned")
+        if not day_key or not isinstance(cleaned, bool):
+            abort(400, "require day_key and cleaned (bool)")
+        session.append_event(sid, {"type": "day_cleaned", "day_key": day_key,
+                                   "cleaned": cleaned})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

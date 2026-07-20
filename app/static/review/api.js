@@ -24,7 +24,7 @@ export function loadDays(){
   d.days.forEach(x=>(S.byPerson[x.person]=S.byPerson[x.person]||[]).push(x));
   const ps = Object.keys(S.byPerson).sort();
   $('pcount').textContent = ps.length+' total';
-  ps.forEach(p=>personSel.add(new Option(`${p}  (${S.byPerson[p].length}d)`, p)));
+  ps.forEach(p=>personSel.add(new Option(personOptionLabel(p), p)));
 
   // Resume where the reviewer left off (last-opened person-day), falling back
   // to the first person if this is a fresh session or that person is gone.
@@ -38,8 +38,26 @@ export function loadDays(){
 }
 
 // ⚠ badge text for one day entry, shared by the initial fill and the live update.
-// An out-of-region day removed from the export gets a ⊘ prefix.
-const dayOptLabel = x => (x.excluded?'⊘ ':'')+`${x.date} · ${weekday(x.date)}`+(x.n_flags?`  ⚠${x.n_flags}`:'');
+// An out-of-region day removed from the export gets a ⊘ prefix; a day the
+// reviewer has manually checked off gets a trailing ✓.
+const dayOptLabel = x => (x.excluded?'⊘ ':'')+`${x.date} · ${weekday(x.date)}`+
+  (x.n_flags?`  ⚠${x.n_flags}`:'')+(x.cleaned?'  ✓':'');
+
+// A person is "done" once every ACTIVE (non-excluded) day of theirs is checked
+// off -- an excluded day needs no cleaning, so it doesn't block the checkmark,
+// but a person with every day excluded is not vacuously "done" either.
+function personAllCleaned(person){
+ const active = (S.byPerson[person]||[]).filter(x=>!x.excluded);
+ return active.length>0 && active.every(x=>x.cleaned);
+}
+const personOptionLabel = p => `${p}  (${S.byPerson[p].length}d)`+(personAllCleaned(p)?'  ✓':'');
+
+// Keep one person's option text (label + done-checkmark) in sync after a
+// day_cleaned/day_include change.
+function refreshPersonOption(person){
+ const opt = [...personSel.options].find(o=>o.value===person);
+ if(opt) opt.textContent = personOptionLabel(person);
+}
 
 // Day-list filter: which days the picker shows. "removed" carries the live count.
 const DAY_FILTERS = {active:x=>!x.excluded, removed:x=>x.excluded, all:()=>true};
@@ -113,16 +131,25 @@ export function setDayIncluded(dayKey, include){
    body:JSON.stringify({day_key:dayKey, include})}).then(()=>refreshDays());
 }
 
-// Re-pull the day index after a recover/delete: update each entry's excluded /
-// out_of_region / flag count in place, then re-render the picker (keeping the open day).
+// The reviewer's manual "cleaned" checkbox for one day, then refresh the picker
+// (which also re-derives whether the WHOLE person is now done).
+export function setDayCleaned(dayKey, cleaned){
+ fetch(`/api/${SID}/day_cleaned`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({day_key:dayKey, cleaned})}).then(()=>refreshDays());
+}
+
+// Re-pull the day index after a recover/delete/cleaned-toggle: update each
+// entry's excluded / out_of_region / flag / cleaned state in place, refresh the
+// open person's done-checkmark, then re-render the picker (keeping the open day).
 export function refreshDays(){
  return fetch(`/api/${SID}/days`).then(r=>r.json()).then(d=>{
   S.nExcluded = d.n_excluded || 0;
   const byKey = {}; d.days.forEach(x=>byKey[x.key]=x);
   Object.values(S.byPerson).forEach(list=>list.forEach(e=>{
    const u = byKey[e.key];
-   if(u){ e.excluded=u.excluded; e.out_of_region=u.out_of_region; e.n_flags=u.n_flags; }
+   if(u){ e.excluded=u.excluded; e.out_of_region=u.out_of_region; e.n_flags=u.n_flags; e.cleaned=u.cleaned; }
   }));
+  refreshPersonOption(S.cur.person);
   fillDays();
  });
 }
@@ -140,6 +167,7 @@ export function loadDay(fit=true, keep=false){
    const opt = [...daySel.options].find(o=>o.value===S.cur.key);
    if(opt) opt.textContent = dayOptLabel(entry);
   }
+  $('dayCleaned').checked = !!(entry && entry.cleaned);
   renderDayActions(entry);   // recover / delete-day controls for the open day
   if(keep){
    const T=d.trips.length; S.hidden=new Set([...S.hidden].filter(s=>s<=T));
