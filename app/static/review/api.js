@@ -25,7 +25,15 @@ export function loadDays(){
   const ps = Object.keys(S.byPerson).sort();
   $('pcount').textContent = ps.length+' total';
   ps.forEach(p=>personSel.add(new Option(`${p}  (${S.byPerson[p].length}d)`, p)));
-  S.cur.person = ps[0]; personSel.value = S.cur.person; fillDays();
+
+  // Resume where the reviewer left off (last-opened person-day), falling back
+  // to the first person if this is a fresh session or that person is gone.
+  const lastKey = d.last_viewed && d.last_viewed.day_key;
+  const lastPerson = lastKey ? lastKey.split('|')[0] : null;
+  S.cur.person = (lastPerson && S.byPerson[lastPerson]) ? lastPerson : ps[0];
+  if(S.cur.person === lastPerson) S.cur.key = lastKey;
+  personSel.value = S.cur.person;
+  fillDays();
  });
 }
 

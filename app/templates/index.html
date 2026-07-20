@@ -31,6 +31,7 @@
  .recent-link:hover{border-color:#3b82f6;background:#f5f9ff}
  .recent-name{font-weight:600;font-size:14px;word-break:break-all}
  .recent-meta{font-size:12px;color:#667085}
+ .recent-lastview{font-size:12px;color:#3b82f6;font-weight:500}
  .recent-del{margin-top:0;width:auto;flex:0 0 auto;background:#fff;color:#98a2b3;
    border:1px solid #e4e7ec;border-radius:9px;padding:0 13px;font-size:14px;font-weight:600}
  .recent-del:hover{color:#c0392b;border-color:rgba(220,60,60,.5);background:rgba(220,60,60,.06)}
@@ -136,9 +137,11 @@
    const when=new Date(s.modified).toLocaleString();
    const meta=`${when} · ${s.n_events} action${s.n_events===1?'':'s'}`+
               (c.person_days?` · ${c.person_days} person-days`:'');
+   const lv=s.last_viewed;
+   const lastOn=lv ? `<span class="recent-lastview">Last worked on: ${lv.day_key.split('|')[0]} · ${lv.day_key.split('|')[1]}</span>` : '';
    return `<div class="recent-row" data-sid="${s.sid}">`+
           `<a class="recent-link" href="/s/${s.sid}"><span class="recent-name">${s.raw_name}</span>`+
-          `<span class="recent-meta">${meta}</span></a>`+
+          `<span class="recent-meta">${meta}</span>${lastOn}</a>`+
           `<button class="recent-del" title="Delete this session">✕</button></div>`;
   }).join('');
   $('recentCard').style.display='';

@@ -58,3 +58,34 @@ def test_list_sessions_orders_by_recent_activity(tmp_path, monkeypatch):
 def test_content_sha_is_stable_and_distinct(tmp_path):
     assert session.content_sha(b"abc") == session.content_sha(b"abc")
     assert session.content_sha(b"abc") != session.content_sha(b"abd")
+
+
+# --- last-viewed: "where the reviewer left off" -----------------------------
+
+def test_get_last_viewed_is_none_for_a_fresh_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    session.write_proposals("s", {"raw_name": "raw.xlsx"})
+    assert session.get_last_viewed("s") is None
+
+
+def test_set_then_get_last_viewed_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    session.set_last_viewed("s", "p1|2024-11-05")
+    lv = session.get_last_viewed("s")
+    assert lv["day_key"] == "p1|2024-11-05"
+    assert "ts" in lv
+
+
+def test_set_last_viewed_overwrites_the_previous_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    session.set_last_viewed("s", "p1|2024-11-05")
+    session.set_last_viewed("s", "p2|2024-11-06")
+    assert session.get_last_viewed("s")["day_key"] == "p2|2024-11-06"
+
+
+def test_list_sessions_includes_last_viewed(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    session.write_proposals("s", {"raw_name": "raw.xlsx"})
+    assert session.list_sessions()[0]["last_viewed"] is None      # never opened yet
+    session.set_last_viewed("s", "p1|2024-11-05")
+    assert session.list_sessions()[0]["last_viewed"]["day_key"] == "p1|2024-11-05"

@@ -34,6 +34,7 @@ def _default_sessions_dir() -> str:
 SESSIONS_DIR = os.environ.get("TRIP_SESSIONS_DIR", _default_sessions_dir())
 PROPOSALS = "proposals.json"
 DECISIONS = "decisions.jsonl"
+LAST_VIEWED = "last_viewed.json"
 
 
 def new_id() -> str:
@@ -120,6 +121,34 @@ def read_events(sid: str) -> list:
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def set_last_viewed(sid: str, day_key: str) -> None:
+    """Record the person-day the reviewer most recently opened, so a reviewer
+    returning later (a different day, a different launch of the app) can be
+    reminded where they left off. Written atomically; overwritten on every
+    live-day view, so it always reflects the last thing actually looked at,
+    not the last thing edited."""
+    d = session_dir(sid)
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, LAST_VIEWED + ".tmp")
+    payload = {"day_key": day_key, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, separators=(",", ":"))
+    os.replace(tmp, os.path.join(d, LAST_VIEWED))
+
+
+def get_last_viewed(sid: str) -> "dict | None":
+    """``{"day_key": ..., "ts": ...}`` for the last-opened person-day, or None
+    if the reviewer has never opened one yet (a brand-new session)."""
+    path = os.path.join(session_dir(sid), LAST_VIEWED)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
 def _line_count(path: str) -> int:
     if not os.path.isfile(path):
         return 0
@@ -179,6 +208,7 @@ def list_sessions() -> list:
             "counts": p.get("counts", {}),
             "n_events": _line_count(dec),
             "modified": datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds"),
+            "last_viewed": get_last_viewed(sid),
             "_mtime": mtime,
         })
     out.sort(key=lambda s: s["_mtime"], reverse=True)

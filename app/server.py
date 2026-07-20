@@ -326,7 +326,8 @@ def create_app() -> Flask:
         return jsonify({"raw_name": data["raw_name"], "counts": data["counts"],
                         "days": days, "mode_speeds": _mode_speeds(sid),
                         "people": data.get("people", {}),
-                        "n_excluded": len(excluded)})
+                        "n_excluded": len(excluded),
+                        "last_viewed": session.get_last_viewed(sid)})
 
     @app.get("/api/<sid>/day")
     def api_day(sid):
@@ -352,6 +353,7 @@ def create_app() -> Flask:
         trips = state.day_trips(sid, key)
         if trips is None:
             abort(404)
+        session.set_last_viewed(sid, key)   # "where the reviewer left off"
 
         all_events = session.read_events(sid)
         res = decisions.resolutions(all_events)
