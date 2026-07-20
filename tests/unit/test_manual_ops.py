@@ -299,6 +299,30 @@ def test_add_with_route_builds_evenly_timed_breadcrumbs():
     assert added.route[1].ts == at(25)
 
 
+def test_add_takes_person_from_day_key_when_no_trips_survive():
+    # Regression: when EVERY real trip on the day was removed (e.g. all
+    # zero_move-accepted) before the add materialises, `trips` is empty, so
+    # person can't be inferred from a surviving trip. The op's day_key
+    # (``person|date``) must supply it -- otherwise the add exports with a blank
+    # accessCode and can't be sorted into the participant's rows.
+    op = {"type": "manual_add", "mode": "Bus", "day_key": "dgxz-doc-sd|2024-11-05",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(35).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 1.0, "start_lon": 2.0, "end_lat": 3.0, "end_lon": 4.0}
+    added = [t for t in apply_manual_ops([], [op]) if t.raw_row == add_row(1)][0]
+    assert added.person == "dgxz-doc-sd"
+
+
+def test_add_prefers_an_explicit_op_person_over_the_day_key():
+    op = {"type": "manual_add", "mode": "Bus", "day_key": "fromkey|2024-11-05",
+          "person": "explicit",
+          "start_ts": at(20).strftime("%Y-%m-%dT%H:%M:%S"),
+          "end_ts": at(35).strftime("%Y-%m-%dT%H:%M:%S"),
+          "start_lat": 1.0, "start_lon": 2.0, "end_lat": 3.0, "end_lon": 4.0}
+    added = [t for t in apply_manual_ops([], [op]) if t.raw_row == add_row(1)][0]
+    assert added.person == "explicit"
+
+
 def test_add_without_route_has_empty_breadcrumbs():
     trips = [mk(1, 0, 10)]
     op = {"type": "manual_add", "mode": "Bus",

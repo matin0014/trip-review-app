@@ -183,6 +183,30 @@ def test_manual_add_appends_routed_A_row(tmp_path, monkeypatch):
     assert "added" in set(dofile["status"])
 
 
+def test_add_keeps_its_person_when_the_days_only_trip_was_zero_move_removed(tmp_path, monkeypatch):
+    # Regression (real session): the day's single trip is an accepted zero_move,
+    # so projection removes it BEFORE the add materialises -- leaving no trip to
+    # infer person from. The add must still carry the participant (from the
+    # op's day_key), or it exports with a blank accessCode and falls to the
+    # bottom of the file instead of sorting into the person's rows.
+    stationary = trip("09:00:00", "09:20:00", 49.260, -123.120, 49.2601, -123.120,
+                      mode="Walk")
+    # a near-zero displacement route so classify_all flags zero_move
+    stationary["routes"] = _route(49.260, -123.120, 49.2601, -123.120, "09:00:00", "09:20:00")
+    sid = _make_session(tmp_path, monkeypatch, [stationary])
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "zero_move"), "resolution": "accept"})
+    session.append_event(sid, {
+        "type": "manual_add", "start_ts": f"{DATE}T10:00:00", "end_ts": f"{DATE}T10:15:00",
+        "mode": "Bike", "purpose": "Shopping",
+        "start_lat": 49.30, "start_lon": -123.12, "end_lat": 49.31, "end_lon": -123.11,
+        "route": [[49.30, -123.12], [49.31, -123.11]], "day_key": DAY_KEY})
+    cleaned, _ = _export(sid)
+    added = cleaned[cleaned["trip_id"] == "A01"].iloc[0]
+    assert added["accessCode"] == PERSON      # not blank/NaN
+    assert pd.notna(added["accessCode"])
+
+
 def test_manual_add_sorts_into_chronological_position(tmp_path, monkeypatch):
     # an add whose start falls BETWEEN existing trips must slot in by time, not pile
     # up at the bottom of the cleaned file.

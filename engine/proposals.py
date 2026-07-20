@@ -271,7 +271,16 @@ def _apply_add(trips: list, op: dict, n: int) -> list:
     if any(t.raw_row == row or row in t.absorbed for t in trips):
         return trips
     tz = trips[0].start_ts.tzinfo if trips else None
-    person = op.get("person") if op.get("person") is not None else (trips[0].person if trips else None)
+    # Person: prefer an explicit op field, then the day_key (``person|date`` — always
+    # present and unambiguous), and only then the surviving trips. The day_key
+    # fallback matters when EVERY real trip on the day was removed (e.g. all
+    # zero_move-accepted) before this add materialises: `trips` is then empty, so
+    # inferring from `trips[0]` would leave the add person-less (blank accessCode in
+    # the export, and unsortable into the participant's rows).
+    person = op.get("person")
+    if person is None:
+        day_key = op.get("day_key") or ""
+        person = day_key.split("|", 1)[0] if "|" in day_key else (trips[0].person if trips else None)
     start_ts = _split_datetime(op["start_ts"], tz)
     end_ts = _split_datetime(op["end_ts"], tz)
     trip = Trip(
