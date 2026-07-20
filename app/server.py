@@ -108,6 +108,22 @@ def _live_pending_counts(sid: str) -> dict:
     return counts
 
 
+def _day_pending_count(sid: str, day_key: str) -> int:
+    """Flags still PENDING in the live projection for ONE person-day -- the same
+    rule as `_live_pending_counts`, scoped to a single day so checking the
+    "cleaned" box can gate on it without recomputing every day in the session."""
+    trips = state.day_trips(sid, day_key)
+    if not trips:
+        return 0
+    all_events = session.read_events(sid)
+    res = decisions.resolutions(all_events)
+    accepted = {fid for fid, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
+    resolved = decisions.APPLY_RESOLUTIONS | decisions.WAIVE_RESOLUTIONS
+    ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == day_key]
+    _, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
+    return sum(1 for f in surfaced if res.get(f.flag_id) not in resolved)
+
+
 def _region_status(sid: str) -> tuple:
     """``(auto_out, excluded)`` day-key sets for a session: the out-of-region days
     (auto-removed by default) and the effective excluded set after the reviewer's
@@ -593,13 +609,17 @@ def create_app() -> Flask:
     @app.post("/api/<sid>/day_cleaned")
     def api_day_cleaned(sid):
         """Reviewer's manual "cleaned" checkbox for one person-day. Sticky, like
-        day_include -- see `decisions.cleaned_days`."""
+        day_include -- see `decisions.cleaned_days`. Checking it off is refused
+        while the day still has PENDING flags: every flag must be addressed
+        (accepted or waived) first. Unchecking is always allowed."""
         if not session.exists(sid):
             abort(404)
         body = request.get_json(silent=True) or {}
         day_key, cleaned = body.get("day_key"), body.get("cleaned")
         if not day_key or not isinstance(cleaned, bool):
             abort(400, "require day_key and cleaned (bool)")
+        if cleaned and _day_pending_count(sid, day_key) > 0:
+            abort(400, "Flags must be addressed (accepted or waived) before marking this day as cleaned.")
         session.append_event(sid, {"type": "day_cleaned", "day_key": day_key,
                                    "cleaned": cleaned})
         return _state(sid)

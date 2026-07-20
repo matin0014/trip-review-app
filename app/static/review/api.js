@@ -132,7 +132,11 @@ export function setDayIncluded(dayKey, include){
 }
 
 // The reviewer's manual "cleaned" checkbox for one day, then refresh the picker
-// (which also re-derives whether the WHOLE person is now done).
+// (which also re-derives whether the WHOLE person is now done). app.js already
+// blocks checking it off client-side while flags are pending, against the
+// already-loaded day; the server enforces the same rule as a stale-client
+// backstop. Either way, refreshDays() re-reads the true state afterward, so a
+// server-side rejection just resyncs the checkbox back to unchecked.
 export function setDayCleaned(dayKey, cleaned){
  fetch(`/api/${SID}/day_cleaned`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({day_key:dayKey, cleaned})}).then(()=>refreshDays());

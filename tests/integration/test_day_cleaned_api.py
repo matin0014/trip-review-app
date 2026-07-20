@@ -39,18 +39,25 @@ def trip(date, start, end, slat, slon, elat, elon, person):
 
 
 # P1 has two days; P2 has one -- lets tests check both "one of several days"
-# and "the person's only day" cleaned-toggle behavior.
+# and "the person's only day" cleaned-toggle behavior. P3's day has a genuine
+# fragment flag (its two legs are <=200m / <3min apart), for the pending-flag
+# gate: an untouched gap that small is neither long enough nor far enough to
+# read as a real activity, so classify_day surfaces it as a likely one-drive-
+# split-in-two rather than silently treating it as a clean, resolved day.
 def rows():
     return [
         trip(DATE, "09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120, "P1"),
         trip(OTHER_DATE, "09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120, "P1"),
         trip(DATE, "09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120, "P2"),
+        trip(DATE, "09:00:00", "09:10:00", 49.260, -123.120, 49.270, -123.120, "P3"),
+        trip(DATE, "09:11:00", "09:20:00", 49.270, -123.120, 49.290, -123.120, "P3"),
     ]
 
 
 P1_DAY1 = f"P1|{DATE}"
 P1_DAY2 = f"P1|{OTHER_DATE}"
 P2_DAY1 = f"P2|{DATE}"
+P3_DAY1 = f"P3|{DATE}"
 
 
 @pytest.fixture
@@ -106,3 +113,30 @@ def test_day_cleaned_unknown_session_404(client):
     c, _ = client
     r = c.post("/api/nope/day_cleaned", json={"day_key": P1_DAY1, "cleaned": True})
     assert r.status_code == 404
+
+
+# --- gate: flags must be resolved before a day can be checked off -----------
+
+def test_checking_off_a_day_with_a_pending_flag_is_refused(client):
+    c, sid = client
+    r = c.post(f"/api/{sid}/day_cleaned", json={"day_key": P3_DAY1, "cleaned": True})
+    assert r.status_code == 400
+    payload = c.get(f"/api/{sid}/days").get_json()
+    assert _day(payload, P3_DAY1)["cleaned"] is False   # refused, not silently recorded
+
+
+def test_unchecking_is_never_blocked_by_pending_flags(client):
+    c, sid = client
+    r = c.post(f"/api/{sid}/day_cleaned", json={"day_key": P3_DAY1, "cleaned": False})
+    assert r.status_code == 200
+
+
+def test_checking_off_succeeds_once_the_flag_is_resolved(client):
+    c, sid = client
+    flag_id = next(f["id"] for f in c.get(f"/api/{sid}/live-day",
+                                          query_string={"key": P3_DAY1}).get_json()["flags"])
+    c.post(f"/api/{sid}/decision", json={"flag_id": flag_id, "resolution": "waive"})
+    r = c.post(f"/api/{sid}/day_cleaned", json={"day_key": P3_DAY1, "cleaned": True})
+    assert r.status_code == 200
+    payload = c.get(f"/api/{sid}/days").get_json()
+    assert _day(payload, P3_DAY1)["cleaned"] is True

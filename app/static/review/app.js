@@ -131,7 +131,18 @@ $('bAddCommit').onclick = ()=>{
 
 personSel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.person=personSel.value; fillDays();};
 daySel.onchange = ()=>{if(S.addMode)exitAdd(); S.cur.key=daySel.value; loadDay();};
-$('dayCleaned').onchange = ()=>setDayCleaned(S.cur.key, $('dayCleaned').checked);
+$('dayCleaned').onchange = ()=>{
+ const box = $('dayCleaned');
+ // Checking it off requires every flag on THIS day resolved first (accepted
+ // or waived) -- checked client-side against the already-loaded day so it's
+ // instant; the server enforces the same rule (see setDayCleaned's catch).
+ if(box.checked && S.cur.data && S.cur.data.flags.some(f=>f.status==='pending')){
+  box.checked = false;
+  alert('Flags must be addressed (accepted or waived) before marking this day as cleaned.');
+  return;
+ }
+ setDayCleaned(S.cur.key, box.checked);
+};
 $('dayFilter').onchange = ()=>{S.dayFilter=$('dayFilter').value; fillDays();};
 [lyTrips, lyStraight, lyFlags, lyEnds, lyHome].forEach(c=>c.onchange=render);
 // Showing the region boxes zooms out to them (at a day's zoom the edges are off-screen).
