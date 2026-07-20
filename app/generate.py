@@ -66,52 +66,20 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     split_b_of = {split_b_row(op["raw_row"]): op["raw_row"]
                   for op in day_ops if op.get("type") == "manual_split"}
 
-    parent: dict = {}
-
-    def find(x: int) -> int:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)  # deterministic parent; real root recomputed below
-
-    for f in applied:
-        if f.flag_type in ("fragment", "mode_change"):
-            union(f.left[0], f.right[0])
-
-    # Canonical M-id root = lowest POSITIVE (workbook) member when the group has one,
-    # else its lowest member. This makes an accepted fragment/mode_change between a
-    # logged trip and a manually-ADDED trip anchor to the workbook row (M<row>) rather
-    # than the added leg's negative raw_row, matching engine `_merge_group` and the
-    # manual_merge branch below; without it the merge collapses to the wrong id and
-    # `merge_overrides` (root >= 0 only) never extends the row to the full span.
-    groups: dict = defaultdict(list)
-    for r in parent:
-        groups[find(r)].append(r)
-    merged_root = {}
-    for members in groups.values():
+    # Merge groups are read DIRECTLY from the live (fixpoint) trips, never re-derived
+    # from flags + ops here -- so the export's grouping is always exactly what the
+    # reviewer saw on screen. Each live merged trip already carries its full
+    # membership in `absorbed` and its canonical id in `raw_row` (lowest positive
+    # member, else lowest -- see engine `_merge_group`). Re-deriving the grouping
+    # independently used to let an accepted fragment/mode_change and a manual_merge
+    # that SHARE a row disagree, splitting one merged trip into two M-rows on export
+    # (and letting order-dependent merges land differently than the live view).
+    merged_root: dict = {}
+    for t in live:
+        members = {t.raw_row} | set(t.absorbed)
         if len(members) > 1:
-            pos = [m for m in members if m >= 0]
-            root = min(pos) if pos else min(members)
             for m in members:
-                merged_root[m] = root
-
-    # Manual merges: add their members to merged_root so they get M-prefix trip_ids.
-    # Root = lowest POSITIVE (workbook) member when present, so a logged+added merge
-    # anchors to the workbook row (matches engine `_merge_group`); an all-added merge
-    # keeps its negative root and stays a single A-row.
-    for op in (day_ops or []):
-        if op.get("type") == "manual_merge":
-            rr = op["raw_rows"]
-            pos = [r for r in rr if r >= 0]
-            root = min(pos) if pos else min(rr)
-            for r in rr:
-                merged_root[r] = root
+                merged_root[m] = t.raw_row
 
     # merge_wins: a zero_move on a merged piece is NOT a removal.
     removed = {f.trip for f in applied if f.flag_type == "zero_move"} - set(merged_root)

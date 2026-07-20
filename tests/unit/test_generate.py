@@ -78,6 +78,22 @@ def test_accept_fragment_shares_merge_id():
     assert rows == [(1, "M1"), (2, "M1")] and stubs == []
 
 
+def test_manual_merge_does_not_split_an_accepted_fragment_group_sharing_a_row():
+    # Regression: an accepted fragment merges (1,2), and a manual_merge references
+    # row 2 (with row 3). The fragment already consumed row 2, so the LIVE view is
+    # {1,2} merged + row 3 standalone (the manual_merge no-ops on the gone row).
+    # The export used to re-derive grouping independently: it pulled row 2 into a
+    # SECOND M-group with row 3, splitting 1 and 2 apart (1->M1, 2->M2). It must now
+    # read the grouping straight from the live trips, keeping 1 and 2 as one M-id.
+    trips = conflict_day() + [leg(3, 5, 19, 24, 1050.0, 1100.0)]
+    ops = [{"type": "manual_merge", "raw_rows": [2, 3], "day_key": "p|2024-11-05"}]
+    rows, stubs, *_ = clean_day(trips, {fid(conflict_day(), "fragment")}, day_ops=ops)
+    ids = dict(rows)
+    assert ids[1] == ids[2] == "M1"     # 1 and 2 stay one group, never split into M1 + M2
+    assert ids[3] == "3"                # row 3 standalone (its merge target was consumed)
+    assert stubs == []
+
+
 def test_accept_zero_move_drops_the_row():
     trips = conflict_day()
     rows, *_ = clean_day(trips, {fid(trips, "zero_move")})
