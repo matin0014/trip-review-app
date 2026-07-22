@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from app.decisions import cleaned_days, day_overrides, excluded_days, manual_ops, replay
+from app.decisions import (cleaned_days, day_overrides, excluded_days, manual_ops,
+                           replay, trip_comments)
 
 
 def dec(flag_id, resolution):
@@ -126,6 +127,43 @@ def test_cleaned_days_ignores_revert_redo():
     # sticky, like day_include: a flag-level revert must not silently un-check
     # a day the reviewer marked done.
     assert cleaned_days([cln("p|d1", True), REVERT]) == {"p|d1": True}
+
+
+# --- trip_comments: the reviewer's free-text note per trip ------------------
+
+def cmt(day_key, raw_row, text):
+    return {"type": "trip_comment", "day_key": day_key, "raw_row": raw_row, "comment": text}
+
+
+def test_no_events_means_no_comments():
+    assert trip_comments([]) == {}
+
+
+def test_comment_is_keyed_by_day_and_row():
+    assert trip_comments([cmt("p|d1", 5, "check this")]) == {("p|d1", 5): "check this"}
+
+
+def test_last_comment_on_a_row_wins():
+    events = [cmt("p|d1", 5, "first"), cmt("p|d1", 5, "second")]
+    assert trip_comments(events) == {("p|d1", 5): "second"}
+
+
+def test_saving_an_empty_comment_clears_it():
+    events = [cmt("p|d1", 5, "note"), cmt("p|d1", 5, "   ")]
+    assert trip_comments(events) == {}
+
+
+def test_same_added_row_on_different_days_does_not_collide():
+    # a manual add's raw_row is a PER-DAY counter, so -2000001 exists on every day
+    # that has an add -- notes must not leak between participants.
+    events = [cmt("p1|d1", -2000001, "p1 note"), cmt("p2|d1", -2000001, "p2 note")]
+    assert trip_comments(events) == {("p1|d1", -2000001): "p1 note",
+                                     ("p2|d1", -2000001): "p2 note"}
+
+
+def test_comments_ignore_revert_redo():
+    # sticky, like day_include: a flag revert must not drop a note.
+    assert trip_comments([cmt("p|d1", 5, "note"), REVERT]) == {("p|d1", 5): "note"}
 
 
 # --- undo_event: targeted undo of one specific edit, by its log serial ------

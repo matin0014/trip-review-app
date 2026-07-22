@@ -135,6 +135,18 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .time-edit-act{display:flex;gap:6px;margin-top:4px}
 .time-edit-act button{font-family:var(--sans);font-size:12px;border:1px solid var(--paper-300);background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 13px;cursor:pointer}
 .time-edit-act .tm-save{background:var(--cobalt-500);border-color:var(--cobalt-500);color:#fff}
+.comment-add{padding-top:8px}
+.comment-add .comment-toggle{font-size:12px;padding:4px 10px}
+.comment-row .comment-toggle{cursor:pointer;text-align:right}
+.comment-row .comment-text{font-family:var(--sans);color:var(--ink-800);white-space:pre-wrap}
+.comment-link{color:var(--cobalt-500);font-size:11px;white-space:nowrap}
+.comment-edit{padding-top:8px}
+.comment-edit textarea{width:100%;box-sizing:border-box;font-family:var(--sans);font-size:12.5px;
+  border:1px solid var(--paper-300);border-radius:6px;padding:6px 8px;resize:vertical}
+.comment-act{display:flex;gap:6px;margin-top:4px}
+.comment-act button{font-family:var(--sans);font-size:12px;border:1px solid var(--paper-300);
+  background:var(--paper-0);color:var(--ink-700);border-radius:6px;padding:4px 13px;cursor:pointer}
+.comment-act .cm-save{background:var(--cobalt-500);border-color:var(--cobalt-500);color:#fff}
 .reposition-act{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--paper-200)}
 .reposition-act .reposition-btn{font-size:12px;padding:4px 10px}
 .reposition-act .reposition-cancel{background:rgba(220,60,60,.12);border-color:rgba(220,60,60,.45);color:#b42318}

@@ -388,10 +388,14 @@ def create_app() -> Flask:
                 return "accepted"
             return "waived" if r in decisions.WAIVE_RESOLUTIONS else "pending"
 
+        # {raw_row: note} for THIS day only; the client keys them off each trip's id
+        comments = {str(rr): txt for (dk, rr), txt
+                    in decisions.trip_comments(all_events).items() if dk == key}
         return jsonify({
             "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
             "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
             "edits": _edits_for_day(all_events, key),
+            "comments": comments,
         })
 
     @app.get("/api/<sid>/state")
@@ -622,6 +626,23 @@ def create_app() -> Flask:
             abort(400, "Flags must be addressed (accepted or waived) before marking this day as cleaned.")
         session.append_event(sid, {"type": "day_cleaned", "day_key": day_key,
                                    "cleaned": cleaned})
+        return _state(sid)
+
+    @app.post("/api/<sid>/comment")
+    def api_comment(sid):
+        """Attach (or clear) a free-text note on ONE trip. Sticky like day_include,
+        outside the undo/redo LIFO -- see `decisions.trip_comments`. An empty
+        string clears the note. Accepts any raw_row, including a manually-added
+        trip's negative one."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key, raw_row = body.get("day_key"), body.get("raw_row")
+        comment = body.get("comment")
+        if not day_key or raw_row is None or not isinstance(comment, str):
+            abort(400, "require day_key, raw_row and comment (string)")
+        session.append_event(sid, {"type": "trip_comment", "day_key": day_key,
+                                   "raw_row": int(raw_row), "comment": comment.strip()})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

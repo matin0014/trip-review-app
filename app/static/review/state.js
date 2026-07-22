@@ -19,6 +19,7 @@ export const S = {
   sel: null,               // selected trip seq (detail open)
   modeOpen: false,         // is the selected trip's mode dropdown expanded
   timeOpen: false,         // is the selected trip's start/end time editor open
+  commentOpen: false,      // is the selected trip's comment textarea open
   purposeOpen: false,      // is the selected trip's purpose dropdown expanded
   flagSel: null,           // expanded flag id (detail open)
   selId: null,             // selected trip's raw_row (stable id, survives renumber)

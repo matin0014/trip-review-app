@@ -233,6 +233,14 @@ export function manualAdd(payload){
    body:JSON.stringify(payload)}).then(()=>loadDay(false,true));
 }
 
+// Attach (or clear, with an empty string) the reviewer's note on one trip. Not a
+// geometry edit, so it never re-runs the cascade -- but loadDay refreshes the
+// panel so the saved note shows immediately.
+export function setComment(rawRow, comment, dayKey){
+ fetch(`/api/${SID}/comment`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, comment, day_key:dayKey})}).then(()=>loadDay(false,true));
+}
+
 export function manualReposition(rawRow, end, lat, lon, dayKey){
  fetch(`/api/${SID}/manual_reposition`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_row:rawRow, end, lat, lon, day_key:dayKey})}).then(()=>loadDay(false,true));

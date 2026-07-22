@@ -5,11 +5,34 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime, undoEdit} from './api.js';
+import {decide, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
 const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+// Comments are free reviewer text dropped into innerHTML, so they must be escaped.
+const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// The reviewer's free-text note for one trip, exported in the `comment` column.
+// Collapsed: the note itself (with an edit link) or an "Add comment" button when
+// there is none. Open: a textarea + Save/Cancel. Saving empty clears the note.
+function commentHTML(t){
+ const note = (S.cur.data.comments || {})[t.id] || '';
+ if(S.commentOpen && S.sel===t.seq){
+  return `<div class="comment-edit">`+
+    `<textarea class="cm-text" rows="3" placeholder="Note about this trip…">${_esc(note)}</textarea>`+
+    `<div class="comment-act"><button class="cm-save">Save</button>`+
+    `<button class="cm-cancel">Cancel</button></div></div>`;
+ }
+ if(note){
+  return `<div class="drow comment-row"><span class="k">Comment</span>`+
+    `<span class="v comment-toggle"><span class="comment-text">${_esc(note)}</span>`+
+    ` <span class="comment-link">edit ▸</span></span></div>`;
+ }
+ return `<div class="drow comment-add"><button class="act comment-toggle">Add comment</button></div>`;
+}
 
 // The Mode row is interactive: an arrow toggles a list of the workbook's modes
 // (with their reference speeds) so the reviewer can relabel this trip's mode.
@@ -72,6 +95,7 @@ function detailHTML(t){
     `${activeEnd==='end'?'Cancel':'Change end position'}</button>`+
   `</div>`+
   (activeEnd ? `<div class="reposition-hint">Click the map to set the new ${activeEnd} location.</div>` : '')+
+  commentHTML(t)+
  `</div>`;
 }
 
@@ -159,7 +183,13 @@ export function renderTrips(){
      alreadyActive ? S.exitReposition() : S.startReposition(t.id, end);
      return;
     }
-    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.render();
+    if(e.target.closest('.cm-save')){
+     S.commentOpen=false; setComment(t.id, card.querySelector('.cm-text').value, S.cur.key); return;
+    }
+    if(e.target.closest('.cm-cancel')){ S.commentOpen=false; S.render(); return; }
+    if(e.target.closest('.comment-toggle')){ S.commentOpen=!S.commentOpen; S.render(); return; }
+    if(e.target.closest('.comment-edit')) return;  // clicks inside the textarea don't collapse
+    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.commentOpen=false; S.render();
    };
   }
   tripsEl.appendChild(card);
