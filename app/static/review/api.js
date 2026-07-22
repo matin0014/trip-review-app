@@ -33,6 +33,7 @@ export function loadDays(){
   S.cur.person = (lastPerson && S.byPerson[lastPerson]) ? lastPerson : ps[0];
   if(S.cur.person === lastPerson) S.cur.key = lastKey;
   personSel.value = S.cur.person;
+  renderProgress();
   fillDays();
  });
 }
@@ -57,6 +58,31 @@ const personOptionLabel = p => `${p}  (${S.byPerson[p].length}d)`+(personAllClea
 function refreshPersonOption(person){
  const opt = [...personSel.options].find(o=>o.value===person);
  if(opt) opt.textContent = personOptionLabel(person);
+}
+
+// Live cleaning progress for the WHOLE session, under the day-cleaned checkbox.
+// Excluded days need no review, so they're kept out of both the numerator and the
+// denominator; a participant counts as done on the SAME rule as their dropdown ✓
+// (every active day checked off), so the numbers always agree with the checkmarks.
+// A participant whose days are all excluded has nothing to review and is left out
+// entirely, rather than sitting in "remaining" forever.
+export function renderProgress(){
+ const el = $('progress');
+ if(!el) return;
+ let daysDone=0, daysLeft=0, peopleDone=0, peopleTotal=0;
+ Object.keys(S.byPerson).forEach(p=>{
+  const active = (S.byPerson[p]||[]).filter(x=>!x.excluded);
+  if(!active.length) return;
+  peopleTotal++;
+  const done = active.filter(x=>x.cleaned).length;
+  daysDone += done;
+  daysLeft += active.length - done;
+  if(done === active.length) peopleDone++;
+ });
+ const row = (k,v) => `<div class="prow"><span>${k}</span><span class="pval">${v}</span></div>`;
+ el.innerHTML = row('Days cleaned', daysDone) + row('Days remaining', daysLeft)
+   + row('Participants cleaned', peopleDone)
+   + row('Participants remaining', peopleTotal - peopleDone);
 }
 
 // Day-list filter: which days the picker shows. "removed" carries the live count.
@@ -154,6 +180,7 @@ export function refreshDays(){
    if(u){ e.excluded=u.excluded; e.out_of_region=u.out_of_region; e.n_flags=u.n_flags; e.cleaned=u.cleaned; }
   }));
   refreshPersonOption(S.cur.person);
+  renderProgress();   // day/person counts move as days get checked off
   fillDays();
  });
 }
