@@ -172,9 +172,31 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             pts = _points_from_triplets(op["route"])
             fields = ({"start_lat": op["lat"], "start_lon": op["lon"]} if end == "start"
                       else {"end_lat": op["lat"], "end_lon": op["lon"]})
-            trips = [replace(t, route=pts, **fields) if t.raw_row == row else t
+            trips = [replace(t, route=pts, **fields)
+                     if t.raw_row == row and _reposition_targets(op, t) else t
                      for t in trips]
     return trips
+
+
+def _reposition_targets(op: dict, trip) -> bool:
+    """Is `trip` still the trip this reposition was aimed at?
+
+    A merged trip inherits its lowest member's raw_row, so after ``reposition(3)``
+    then ``merge(3, 4)`` the merged trip ALSO has raw_row 3. Re-applying the op on
+    the next cascade round would then overwrite the merged trip's combined route
+    (and end point) with the stale route stored for the un-merged trip 3 -- the
+    merged trip would keep the merge's times and purpose but only leg 3's geometry.
+
+    The op records the target's merge membership (`merged_rows`) at creation time,
+    so a reposition made against a MERGED trip still re-applies to it, while one
+    made before the merge stops at the merge. Ops logged before that field existed
+    fall back to "only if this trip is not a merge product", which is what they
+    were always aimed at.
+    """
+    absorbed = sorted(trip.absorbed)
+    if "merged_rows" not in op:
+        return not absorbed
+    return sorted(op["merged_rows"] or []) == absorbed
 
 
 def _points_from_triplets(triplets: list) -> list:
