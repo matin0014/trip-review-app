@@ -151,13 +151,21 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
     for t in sorted(day_trips, key=lambda x: x.start_ts):
         if t.raw_row in removed:
             continue  # R<row> lives in the Do-file only, not the cleaned file
-        if t.raw_row in split_origins:
+        # MERGE WINS over split-origin: a row can be both (split a trip, then merge
+        # its A piece with a neighbour). The A piece is inside the merged trip now,
+        # so this row must take the M-id and be collapsed into the group's kept row.
+        # Labelling it S<row>-A instead let it escape the merge collapse (which only
+        # drops M-prefixed rows) AND left it untruncated (its live trip no longer
+        # exists standalone, so the A override could not populate) -- the cleaned
+        # file then carried the A piece twice, once inside the M row and once as a
+        # full-length S<row>-A. The B piece is unaffected and still lands as S<row>-B.
+        if t.raw_row in merged_root:
+            rows.append((t.raw_row, project_trip_id("merge", group=merged_root[t.raw_row])))
+        elif t.raw_row in split_origins:
             rows.append((t.raw_row, project_trip_id("split", raw_row=t.raw_row) + "-A"))
             a = live_by_row.get(t.raw_row)
             if a is not None:
                 overrides[t.raw_row] = a  # truncate the kept row to the A piece
-        elif t.raw_row in merged_root:
-            rows.append((t.raw_row, project_trip_id("merge", group=merged_root[t.raw_row])))
         else:
             rows.append((t.raw_row, project_trip_id("keep", raw_row=t.raw_row)))
 

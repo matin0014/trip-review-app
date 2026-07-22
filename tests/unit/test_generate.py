@@ -170,6 +170,25 @@ def test_manual_time_override_for_a_kept_trip():
     assert time_overrides == {2: ("2024-11-05T08:30:00", "2024-11-05T08:45:00")}
 
 
+def test_split_then_merging_the_a_piece_collapses_into_the_merge():
+    # Regression: split a trip, then merge its A piece with the PREVIOUS trip. The
+    # row is both a split origin and a merge member; split used to win, so the row
+    # kept an S<row>-A id, escaped the merge collapse (which only drops M-prefixed
+    # rows) AND stayed untruncated (its live trip no longer exists standalone) --
+    # the cleaned file carried the A piece twice, once inside M and once full-length.
+    trips = [leg(1, 30, 0, 5, 0.0, 0.0),
+             leg(2, 30, 20, 25, 2000.0, 2100.0),
+             leg(3, 30, 40, 65, 4000.0, 6000.0)]
+    ops = [{"type": "manual_split", "raw_row": 3, "day_key": "p|2024-11-05",
+            "split_ts": "2024-11-05T12:46:00", "mode_a": "Walk", "mode_b": "Walk"},
+           {"type": "manual_merge", "raw_rows": [2, 3], "day_key": "p|2024-11-05"}]
+    rows, extras, *_ = clean_day(trips, set(), day_ops=ops)
+    ids = dict(rows)
+    assert ids[2] == "M2" and ids[3] == "M2"   # row 3 joins the merge, not its own S row
+    assert "S3-A" not in ids.values()          # never a stray full-length A row
+    assert [k for k, _ref, _t in extras] == ["split"]   # the B piece still stands alone
+
+
 def test_extra_ids_labels_split_b():
     b = leg(99, 30, 0, 5, 0.0, 0.0)
     (trip_id, kind, _trip), = _extra_ids([("split", 7, b)])
