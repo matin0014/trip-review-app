@@ -27,7 +27,8 @@ from collections import defaultdict
 from datetime import datetime
 
 from app import charts, metrics, regions, routing, session
-from app.decisions import excluded_days, fixpoint, manual_ops, replay, resolutions
+from app.decisions import (excluded_days, fixpoint, manual_ops, replay, resolutions,
+                           trip_comments)
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
@@ -247,6 +248,17 @@ def _fmt_time(dt, original=None) -> str:
     return dt.time().isoformat() + (m.group(1) if m else "")
 
 
+def _note_for_trip(comments: dict, trip) -> str:
+    """The reviewer's note for a SYNTHESIZED row (manual add / split B / gap stub).
+
+    Their raw_row is a per-day negative id that repeats across days, so the note is
+    keyed by (day_key, raw_row); the day_key is rebuilt from the trip itself."""
+    if not comments or trip.person is None:
+        return ""
+    day_key = f"{trip.person}|{trip.start_ts.date()}"
+    return comments.get((day_key, trip.raw_row), "")
+
+
 def _stub_row(stub) -> dict:
     """Map a stub `Trip` onto the raw column names (others left blank)."""
     return {
@@ -390,6 +402,7 @@ def _apply_merge_overrides(df, merge_overrides: dict) -> None:
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
+        t = routing.fill_route_gaps(t)   # street path across the merge seam
         vals = {
             "end_date": t.end_ts.strftime("%Y-%m-%d"),
             "end_time": _fmt_time(t.end_ts),
@@ -404,13 +417,18 @@ def _apply_merge_overrides(df, merge_overrides: dict) -> None:
 
 
 def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=None,
-                    all_ops: list = None, excluded: set = None) -> tuple:
+                    all_ops: list = None, excluded: set = None,
+                    comments: dict = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
     overrides, mode_overrides, time_overrides, purpose_overrides, excluded_rows,
-    merge_overrides, position_overrides)``. ``merge_overrides`` = {kept merge
-    row: live merged trip}, cleaned-only, folds every leg (incl. an added one)
-    into the one kept row. ``position_overrides`` = {raw_row: live trip} from
-    manual repositions (plain kept rows only -- see `clean_day`).
+    merge_overrides, position_overrides, comment_by_row)``. ``merge_overrides`` =
+    {kept merge row: live merged trip}, cleaned-only, folds every leg (incl. an
+    added one) into the one kept row. ``position_overrides`` = {raw_row: live
+    trip} from manual repositions (plain kept rows only -- see `clean_day`).
+    ``comments`` = {(day_key, raw_row): text} from `decisions.trip_comments`;
+    ``comment_by_row`` returns them re-keyed by raw_row for the WORKBOOK (positive)
+    rows only -- an added trip's negative raw_row repeats across days, so those are
+    resolved per-extra by the caller instead.
 
     `tid` = {raw_row: trip_id} for surviving loaded trips (keep / M-merge /
     ``S<row>-A`` split origin); `removed` = raw rows dropped by an accepted
@@ -438,9 +456,17 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     purpose_overrides: dict = {}
     merge_overrides: dict = {}
     position_overrides: dict = {}
+    comment_by_row: dict = {}
     excluded_rows: set = set()
+    comments = comments or {}
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
+        # Notes ride along with the row wherever it lands -- including on an
+        # excluded day, whose rows still appear in the Do-file.
+        for x in day_trips:
+            note = comments.get((day_key, x.raw_row))
+            if note:
+                comment_by_row[x.raw_row] = note
         if day_key in excluded:  # whole day dropped: no projection, just audit the rows
             for x in day_trips:
                 excluded_rows.add(x.raw_row)
@@ -471,23 +497,29 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                     flag_by_row[r].append(tag)
     return (tid, removed, extras, flag_by_row, overrides, mode_overrides,
             time_overrides, purpose_overrides, excluded_rows, merge_overrides,
-            position_overrides)
+            position_overrides, comment_by_row)
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
-                     all_ops: list = None, excluded: set = None):
-    """Read the raw workbook and return it with a `trip_id` column added, removed
-    rows dropped, and accepted missing-trip/reviewed-activity rows appended as
-    ``A``/``Q`` rows. raw columns are preserved verbatim. Skipped/unparsed raw
-    rows stay as plain keeps. Rows of an `excluded` (out-of-region, not recovered)
-    day are dropped from the cleaned file entirely.
+                     all_ops: list = None, excluded: set = None,
+                     comments: dict = None):
+    """Read the raw workbook and return it with `trip_id` + `comment` columns
+    added, removed rows dropped, and accepted missing-trip/reviewed-activity rows
+    appended as ``A``/``Q`` rows. raw columns are preserved verbatim.
+    Skipped/unparsed raw rows stay as plain keeps. Rows of an `excluded`
+    (out-of-region, not recovered) day are dropped from the cleaned file entirely.
+    ``comments`` = {(day_key, raw_row): text} from `decisions.trip_comments`;
+    rows with no note get an empty string.
     """
     import pandas as pd  # lazy: keeps the pure clean_day import light
 
+    comments = comments or {}
     df = pd.read_excel(raw_path).reset_index(drop=True)
     (tid, removed, extras, _, overrides, mode_overrides, time_overrides,
-     purpose_overrides, excluded_rows, merge_overrides, position_overrides) = project_dataset(
-        raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded)
+     purpose_overrides, excluded_rows, merge_overrides, position_overrides,
+     comment_by_row) = project_dataset(
+        raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded,
+        comments=comments)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_merge_overrides(df, merge_overrides)  # kept merge row -> whole-trip end/route/mode/purpose
     _apply_position_overrides(df, position_overrides)  # repositioned row -> new endpoint/route
@@ -498,6 +530,24 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
 
     n = len(df)
     df["trip_id"] = [tid.get(i + 1, str(i + 1)) for i in range(n)]  # raw_row = position + 1
+    # Comment column. A merged group collapses to ONE row here, so that kept row
+    # carries every member's note (joined, de-duplicated) -- otherwise a note on a
+    # dropped leg would silently vanish from the deliverable.
+    merged_note: dict = {}
+    m_groups: dict = defaultdict(list)
+    for raw_row, t in tid.items():
+        if isinstance(t, str) and t[:1] == "M":
+            m_groups[t].append(raw_row)
+    for members in m_groups.values():
+        notes = []
+        for r in sorted(members):
+            note = comment_by_row.get(r)
+            if note and note not in notes:
+                notes.append(note)
+        if notes:
+            merged_note[min(members)] = " | ".join(notes)
+    df["comment"] = [merged_note.get(i + 1) or comment_by_row.get(i + 1, "") or ""
+                     for i in range(n)]
     # drop zero_move/manual deletes, whole out-of-region days, and merged extra legs
     dropped = removed | excluded_rows | merge_drop
     keep = [(i + 1) not in dropped for i in range(n)]
@@ -512,6 +562,9 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
             row = {c: None for c in cols}
             row.update(_stub_row(trip))
             row["trip_id"] = trip_id
+            # a synthesized row's raw_row is a PER-DAY negative id, so its note is
+            # looked up by (day_key, raw_row), not from the workbook-row map
+            row["comment"] = _note_for_trip(comments, trip)
             added.append(row)
         cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
         cleaned = _sort_chronologically(cleaned)  # slot A/Q/split rows into their real spot
@@ -570,7 +623,7 @@ _EXTRA_FLAG = {"add": "missing_trip:accept", "review": "missing_activity:reviewe
 
 
 def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFAULT,
-                    all_ops: list = None, excluded: set = None):
+                    all_ops: list = None, excluded: set = None, comments: dict = None):
     """The Do-file ledger as a DataFrame: EVERY loaded raw row (removed ones kept
     and marked ``R<row>``, unlike the cleaned file which drops them) plus the
     synthesized A/Q rows, with `trip_id` + `status` + `flags` columns added to the
@@ -586,9 +639,12 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     # merge_overrides is cleaned-only (the Do-file keeps every leg untouched);
     # position_overrides applies here too, same as mode/time/purpose -- a
     # reposition is a data correction the audit ledger should show.
+    comments = comments or {}
     (tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides,
-     purpose_overrides, excluded_rows, _merge_overrides, position_overrides) = project_dataset(
-        raw_path, accepted_ids, params, res_map, all_ops=all_ops, excluded=excluded)
+     purpose_overrides, excluded_rows, _merge_overrides, position_overrides,
+     comment_by_row) = project_dataset(
+        raw_path, accepted_ids, params, res_map, all_ops=all_ops, excluded=excluded,
+        comments=comments)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
     _apply_position_overrides(df, position_overrides)  # repositioned row -> new endpoint/route
     _apply_mode_overrides(df, mode_overrides)  # hand-edited travel modes
@@ -606,6 +662,9 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     df["status"] = ["excluded" if (i + 1) in excluded_rows else _status_of(t)
                     for i, t in enumerate(df["trip_id"])]
     df["flags"] = ["; ".join(flag_by_row.get(i + 1, [])) for i in range(n)]
+    # The ledger keeps every leg, so each row shows its OWN note (no merge-group
+    # joining like the cleaned file needs).
+    df["comment"] = [comment_by_row.get(i + 1, "") or "" for i in range(n)]
 
     if extras:
         cols = list(df.columns)
@@ -618,6 +677,7 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
             row["trip_id"] = trip_id
             row["status"] = _status_of(trip_id)   # A->added, Q->reviewed-gap, S->split
             row["flags"] = _EXTRA_FLAG[kind]
+            row["comment"] = _note_for_trip(comments, trip)
             added.append(row)
         df = pd.concat([df, pd.DataFrame(added, columns=cols)], ignore_index=True)
         df = _sort_chronologically(df)  # slot A/Q/split rows into their real spot
@@ -641,13 +701,14 @@ def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     accepted, res_map = replay(events), resolutions(events)
     ops = manual_ops(events)
     excluded = excluded_day_keys(raw_path, events)
+    comments = trip_comments(events)
 
     cleaned = os.path.abspath(os.path.join(session.session_dir(sid), "cleaned.xlsx"))
     dofile = os.path.abspath(os.path.join(session.session_dir(sid), "dofile.xlsx"))
     _write_atomic_xlsx(build_cleaned_df(raw_path, accepted, params, all_ops=ops,
-                                        excluded=excluded), cleaned)
+                                        excluded=excluded, comments=comments), cleaned)
     dofile_df = build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops,
-                                excluded=excluded)
+                                excluded=excluded, comments=comments)
     precision_df = build_precision_df(raw_path, events, params)
     _write_atomic_xlsx_sheets({"dofile": dofile_df, "precision": precision_df}, dofile)
     return cleaned, dofile

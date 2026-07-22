@@ -5,16 +5,39 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime, undoEdit} from './api.js';
+import {decide, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
 const _row = (k,v) => `<div class="drow"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 
+// Comments are free reviewer text dropped into innerHTML, so they must be escaped.
+const _esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// The reviewer's free-text note for one trip, exported in the `comment` column.
+// Collapsed: the note itself (with an edit link) or an "Add comment" button when
+// there is none. Open: a textarea + Save/Cancel. Saving empty clears the note.
+function commentHTML(t){
+ const note = (S.cur.data.comments || {})[t.id] || '';
+ if(S.commentOpen===t.seq){
+  return `<div class="comment-edit">`+
+    `<textarea class="cm-text" rows="3" placeholder="Note about this trip…">${_esc(note)}</textarea>`+
+    `<div class="comment-act"><button class="cm-save">Save</button>`+
+    `<button class="cm-cancel">Cancel</button></div></div>`;
+ }
+ if(note){
+  return `<div class="drow comment-row"><span class="k">Comment</span>`+
+    `<span class="v comment-toggle"><span class="comment-text">${_esc(note)}</span>`+
+    ` <span class="comment-link">edit ▸</span></span></div>`;
+ }
+ return `<div class="drow comment-add"><button class="act comment-toggle">Add comment</button></div>`;
+}
+
 // The Mode row is interactive: an arrow toggles a list of the workbook's modes
 // (with their reference speeds) so the reviewer can relabel this trip's mode.
 function modeRowHTML(t){
- const open = S.modeOpen && S.sel===t.seq;
+ const open = S.modeOpen===t.seq;
  const list = open ? `<div class="mode-list">`+S.modeSpeeds.map(m=>
     `<div class="mode-opt${m.mode===t.mode?' cur':''}" data-mode="${m.mode}">`+
     `<span>${m.mode}</span><span class="mode-sp">${m.ref || ''}</span></div>`).join('')+`</div>` : '';
@@ -26,7 +49,7 @@ function modeRowHTML(t){
 // reviewer can relabel this trip's purpose. The current purpose (if not canonical)
 // is prepended so it stays selectable.
 function purposeRowHTML(t){
- const open = S.purposeOpen && S.sel===t.seq;
+ const open = S.purposeOpen===t.seq;
  const cur = t.purpose || 'n/a';
  const opts = (PURPOSES.includes(t.purpose)||!t.purpose) ? PURPOSES : [t.purpose, ...PURPOSES];
  const list = open ? `<div class="mode-list">`+opts.map(p=>
@@ -39,7 +62,7 @@ function purposeRowHTML(t){
 // + Save/Cancel that re-stamp the trip's start/end (a manual_time op, which feeds
 // the cascade since neighbour gaps depend on times).
 function timeRowsHTML(t){
- if(S.timeOpen && S.sel===t.seq){
+ if(S.timeOpen===t.seq){
   return `<div class="time-edit">`+
     `<label>Start <input type="time" class="tm-s" value="${t.start}"></label>`+
     `<label>End <input type="time" class="tm-e" value="${t.end}"></label>`+
@@ -72,6 +95,7 @@ function detailHTML(t){
     `${activeEnd==='end'?'Cancel':'Change end position'}</button>`+
   `</div>`+
   (activeEnd ? `<div class="reposition-hint">Click the map to set the new ${activeEnd} location.</div>` : '')+
+  commentHTML(t)+
  `</div>`;
 }
 
@@ -106,7 +130,7 @@ export function renderTrips(){
  d.trips.forEach(t=>{
   const card = document.createElement('div');
   const mergeSel = S.mergeMode && S.mergeSelected.has(t.id);
-  card.className = 'row'+(t.seq===S.sel&&!S.mergeMode?' sel':'')
+  card.className = 'row'+(S.sel.has(t.seq)&&!S.mergeMode?' sel':'')
    +(S.hidden.has(t.seq)?' hidden':'')
    +(mergeSel?' merge-sel':'');
   const logged = t.manual?`<span class="logged">logged</span>`:'';
@@ -117,7 +141,7 @@ export function renderTrips(){
    `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}</div></div>`+
    (S.mergeMode ? '' : `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span>`)+
    `</div>`+
-   (t.seq===S.sel&&!S.mergeMode?detailHTML(t):'');
+   (S.sel.has(t.seq)&&!S.mergeMode?detailHTML(t):'');
   if(S.mergeMode){
    card.onclick = ()=>{
     S.mergeSelected.has(t.id)?S.mergeSelected.delete(t.id):S.mergeSelected.add(t.id);
@@ -131,26 +155,26 @@ export function renderTrips(){
     }
     const opt = e.target.closest('.mode-opt');
     if(opt){
-     const m = opt.dataset.mode; S.modeOpen=false;
+     const m = opt.dataset.mode; S.modeOpen=null;
      if(m!==t.mode) manualMode(t.id, m, S.cur.key); else S.render();
      return;
     }
-    if(e.target.closest('.mode-cur')){ S.modeOpen=!S.modeOpen; S.purposeOpen=false; S.render(); return; }
+    if(e.target.closest('.mode-cur')){ S.modeOpen = S.modeOpen===t.seq?null:t.seq; S.purposeOpen=null; S.render(); return; }
     const popt = e.target.closest('.purpose-opt');
     if(popt){
-     const pr = popt.dataset.purpose; S.purposeOpen=false;
+     const pr = popt.dataset.purpose; S.purposeOpen=null;
      if(pr!==t.purpose) manualPurpose(t.id, pr, S.cur.key); else S.render();
      return;
     }
-    if(e.target.closest('.purpose-cur')){ S.purposeOpen=!S.purposeOpen; S.modeOpen=false; S.render(); return; }
+    if(e.target.closest('.purpose-cur')){ S.purposeOpen = S.purposeOpen===t.seq?null:t.seq; S.modeOpen=null; S.render(); return; }
     if(e.target.closest('.tm-save')){
      const s = card.querySelector('.tm-s').value, en = card.querySelector('.tm-e').value;
      if(!s || !en) return;
      if(en <= s){ alert('End time must be after start time'); return; }   // HH:MM string compare = chronological within a day
-     S.timeOpen=false; manualTime(t.id, s, en, S.cur.key); return;
+     S.timeOpen=null; manualTime(t.id, s, en, S.cur.key); return;
     }
-    if(e.target.closest('.tm-cancel')){ S.timeOpen=false; S.render(); return; }
-    if(e.target.closest('.time-toggle')){ S.timeOpen=!S.timeOpen; S.render(); return; }
+    if(e.target.closest('.tm-cancel')){ S.timeOpen=null; S.render(); return; }
+    if(e.target.closest('.time-toggle')){ S.timeOpen = S.timeOpen===t.seq?null:t.seq; S.render(); return; }
     if(e.target.closest('.time-edit')) return;   // clicks inside the inputs don't collapse the detail
     const repBtn = e.target.closest('.reposition-btn');
     if(repBtn){
@@ -159,7 +183,17 @@ export function renderTrips(){
      alreadyActive ? S.exitReposition() : S.startReposition(t.id, end);
      return;
     }
-    const on=S.sel!==t.seq; S.sel=on?t.seq:null; S.selId=on?t.id:null; S.modeOpen=false; S.purposeOpen=false; S.timeOpen=false; S.render();
+    if(e.target.closest('.cm-save')){
+     S.commentOpen=null; setComment(t.id, card.querySelector('.cm-text').value, S.cur.key); return;
+    }
+    if(e.target.closest('.cm-cancel')){ S.commentOpen=null; S.render(); return; }
+    if(e.target.closest('.comment-toggle')){ S.commentOpen = S.commentOpen===t.seq?null:t.seq; S.render(); return; }
+    if(e.target.closest('.comment-edit')) return;  // clicks inside the textarea don't collapse
+    // Expanding a trip does NOT collapse the others -- several details can be
+    // open at once; only the per-trip editors are exclusive.
+    if(S.sel.has(t.seq)){ S.sel.delete(t.seq); S.selId.delete(t.id); }
+    else { S.sel.add(t.seq); S.selId.add(t.id); }
+    S.modeOpen=null; S.purposeOpen=null; S.timeOpen=null; S.commentOpen=null; S.render();
    };
   }
   tripsEl.appendChild(card);
@@ -202,7 +236,10 @@ export function flagCard(f){
   if(!acc){
    const ids = f.seqs.filter(x=>x!=null)
      .map(s=>(S.cur.data.trips.find(t=>t.seq===s)||{}).id).filter(x=>x!=null);
-   if(ids.length) S.selId = Math.min(...ids);
+   if(ids.length && ids.some(r=>S.selId.has(r))){
+    ids.forEach(r=>S.selId.delete(r));
+    S.selId.add(Math.min(...ids));   // follow the survivor; other trips stay expanded
+   }
   }
   decide(f.id, acc?'clear':applyRes);
  };

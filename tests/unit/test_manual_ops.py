@@ -441,6 +441,84 @@ def test_reposition_only_touches_the_targeted_row():
     assert out[1].end_lat == 0.0 and out[1].end_lon == 0.0  # trip 2 untouched
 
 
+def test_reposition_then_merge_keeps_the_whole_merged_trip():
+    # Regression: a merged trip inherits its lowest member's raw_row, so after
+    # reposition(1) + merge(1,2) the merged trip is ALSO raw_row 1. Re-applying
+    # the op each cascade round used to overwrite the merged route/end with the
+    # stale pre-merge route -- the merged trip kept the merge's TIMES but only
+    # leg 1's geometry (times said 0-20 min while the route stopped at leg 1).
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
+    leg2 = [RoutePoint(0.0, float(m), at(m)) for m in range(12, 21)]
+    t1, t2 = mk(1, 0, 10, route=kept), mk(2, 12, 20, route=leg2)
+    t2.end_lon = 20.0
+    ops = [
+        {"type": "manual_reposition", "raw_row": 1, "end": "end",
+         "lat": 0.0, "lon": 5.0, "route": _triplets(kept), "merged_rows": []},
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+    ]
+    trips = [t1, t2]
+    for _ in range(3):          # every cascade round re-applies the same op list
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    merged = trips[0]
+    assert merged.start_ts == at(0) and merged.end_ts == at(20)   # full merged span
+    assert (merged.end_lat, merged.end_lon) == (0.0, 20.0)        # leg 2's end, not leg 1's
+    assert len(merged.route) == len(kept) + len(leg2)             # BOTH legs' breadcrumbs
+    assert merged.route[-1].lon == 20.0
+
+
+def test_reposition_logged_against_a_merged_trip_still_applies():
+    # the other direction: merge FIRST, then reposition the merged trip. The op
+    # records the merged membership, so it must keep re-applying to it.
+    kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
+    leg2 = [RoutePoint(0.0, float(m), at(m)) for m in range(12, 21)]
+    t1, t2 = mk(1, 0, 10, route=kept), mk(2, 12, 20, route=leg2)
+    moved = kept + leg2 + [RoutePoint(0.0, 30.0, at(22))]
+    ops = [
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+        {"type": "manual_reposition", "raw_row": 1, "end": "end",
+         "lat": 0.0, "lon": 30.0, "route": _triplets(moved), "merged_rows": [1, 2]},
+    ]
+    trips = [t1, t2]
+    for _ in range(3):
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    assert (trips[0].end_lat, trips[0].end_lon) == (0.0, 30.0)   # reposition took effect
+    assert trips[0].route[-1].lon == 30.0
+
+
+def test_time_edit_before_a_merge_does_not_shrink_the_merged_span():
+    # Regression: the merged trip inherits leg 1's raw_row, so re-applying a time
+    # edit aimed at leg 1 forced the MERGED trip's window back to that leg's --
+    # silently dropping the part of the merge outside it (and re-timing its route).
+    ops = [
+        {"type": "manual_time", "raw_row": 1,
+         "start_ts": at(0).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(8).strftime("%Y-%m-%dT%H:%M:%S")},
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+    ]
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    for _ in range(3):
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    assert trips[0].start_ts == at(0) and trips[0].end_ts == at(20)   # FULL merged span
+
+
+def test_time_edit_after_a_merge_still_retimes_the_merged_trip():
+    # the opposite order: the reviewer merged, then edited the merged trip's times.
+    ops = [
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+        {"type": "manual_time", "raw_row": 1,
+         "start_ts": at(2).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(25).strftime("%Y-%m-%dT%H:%M:%S")},
+    ]
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    for _ in range(3):
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    assert trips[0].start_ts == at(2) and trips[0].end_ts == at(25)   # edit took effect
+
+
 def test_reposition_is_idempotent():
     kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
     patch = [RoutePoint(0.0, 6.0, at(6)), RoutePoint(0.0, 9.0, at(10))]

@@ -111,6 +111,28 @@ def cleaned_days(events: list) -> dict:
     return cleaned
 
 
+def trip_comments(events: list) -> dict:
+    """Effective free-text note per trip, ``{(day_key, raw_row): text}`` (last-write-wins).
+
+    Keyed by (day_key, raw_row), never raw_row alone: a manually-ADDED trip's
+    raw_row comes from a PER-DAY counter (`engine.proposals.add_row`), so the same
+    negative row exists on every day that has an add -- a row-only key would leak
+    one participant's note onto another's. Sticky, like ``day_include``: kept OUT of
+    the undo/redo LIFO so a flag revert never silently drops a note. Saving an empty
+    comment clears it (the note is removed, not stored blank)."""
+    out: dict = {}
+    for e in events:
+        if e.get("type") != "trip_comment":
+            continue
+        key = (e["day_key"], int(e["raw_row"]))
+        text = (e.get("comment") or "").strip()
+        if text:
+            out[key] = text
+        else:
+            out.pop(key, None)
+    return out
+
+
 def excluded_days(events: list, auto_out: set) -> set:
     """The ``day_key``s dropped from the cleaned export. ``auto_out`` is the set of
     out-of-region days (auto-removed by default). A day is excluded when it is

@@ -16,12 +16,15 @@ export const S = {
   modeSpeeds: [],          // [{mode, avg_kmh, n}] workbook-wide reference
   cur: {person:null, key:null, data:null},
   hidden: new Set(),       // seqs toggled off
-  sel: null,               // selected trip seq (detail open)
-  modeOpen: false,         // is the selected trip's mode dropdown expanded
-  timeOpen: false,         // is the selected trip's start/end time editor open
-  purposeOpen: false,      // is the selected trip's purpose dropdown expanded
+  sel: new Set(),          // seqs of trips whose detail is expanded (several at once)
+  // Editors are scoped to ONE trip at a time: each holds that trip's seq, or null.
+  // (Details can be expanded on several trips at once; only one editor is open.)
+  modeOpen: null,          // seq of the trip whose mode dropdown is expanded
+  timeOpen: null,          // seq of the trip whose start/end time editor is open
+  commentOpen: null,       // seq of the trip whose comment textarea is open
+  purposeOpen: null,       // seq of the trip whose purpose dropdown is expanded
   flagSel: null,           // expanded flag id (detail open)
-  selId: null,             // selected trip's raw_row (stable id, survives renumber)
+  selId: new Set(),        // those trips' raw_rows (stable ids, survive renumber)
   followSel: true,         // keep the selection on its trip across an action
   resolvedOpen: false,     // is the Resolved group expanded
   editsOpen: false,        // is the Edited group expanded

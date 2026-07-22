@@ -132,8 +132,8 @@ export function drawMap(fit){
   const col = lyStraight.checked ? STRAIGHT_COL
              : mergeSel ? '#f0c040'
              : tcol(t.seq);
-  const selWeight = mergeSel ? 7 : (t.seq===S.sel ? 6 : 4);
-  const opacity = mergeSel ? 1 : (t.seq===S.sel ? 1 : .85);
+  const selWeight = mergeSel ? 7 : (S.sel.has(t.seq) ? 6 : 4);
+  const opacity = mergeSel ? 1 : (S.sel.has(t.seq) ? 1 : .85);
 
   if(lyTrips.checked){
    let line;
@@ -177,7 +177,10 @@ export function drawMap(fit){
        S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
        S.render(false);
       } else {
-       S.sel=t.seq; S.selId=t.id; S.modeOpen=false; S.render();
+       // clicking a trip on the map expands it alongside any already open
+       if(S.sel.has(t.seq)){ S.sel.delete(t.seq); S.selId.delete(t.id); }
+       else { S.sel.add(t.seq); S.selId.add(t.id); }
+       S.modeOpen=null; S.render();
       }
      });
    L.circleMarker(t.e, {radius:5, color:col, weight:2, fillColor:'#fff', fillOpacity:1}).addTo(layer);

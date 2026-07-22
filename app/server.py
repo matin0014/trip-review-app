@@ -108,6 +108,24 @@ def _live_pending_counts(sid: str) -> dict:
     return counts
 
 
+def _live_trip(sid: str, day_key: str, raw_row: int):
+    """The LIVE (post-fixpoint) trip with `raw_row` on this day, or None.
+
+    Used by the edits that must record what they were aimed at: a merged trip
+    inherits its lowest member's raw_row, so `trip.absorbed` is what
+    distinguishes "the merged trip" from "the un-merged leg" when the op is
+    replayed (see `engine.proposals._op_targets`)."""
+    trips = state.day_trips(sid, day_key)
+    if not trips:
+        return None
+    events = session.read_events(sid)
+    accepted = {fid for fid, r in decisions.resolutions(events).items()
+                if r in decisions.APPLY_RESOLUTIONS}
+    ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
+    live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
+    return next((t for t in live_trips if t.raw_row == int(raw_row)), None)
+
+
 def _day_pending_count(sid: str, day_key: str) -> int:
     """Flags still PENDING in the live projection for ONE person-day -- the same
     rule as `_live_pending_counts`, scoped to a single day so checking the
@@ -379,6 +397,7 @@ def create_app() -> Flask:
         ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == key]
         live_trips, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
         live_trips = [routing.route_trip(t) for t in live_trips]  # OSM path for stubs
+        live_trips = [routing.fill_route_gaps(t) for t in live_trips]  # route a merge seam
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 
@@ -388,10 +407,14 @@ def create_app() -> Flask:
                 return "accepted"
             return "waived" if r in decisions.WAIVE_RESOLUTIONS else "pending"
 
+        # {raw_row: note} for THIS day only; the client keys them off each trip's id
+        comments = {str(rr): txt for (dk, rr), txt
+                    in decisions.trip_comments(all_events).items() if dk == key}
         return jsonify({
             "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
             "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
             "edits": _edits_for_day(all_events, key),
+            "comments": comments,
         })
 
     @app.get("/api/<sid>/state")
@@ -554,9 +577,14 @@ def create_app() -> Flask:
         end_ts = _combine_dt(day_key, end_time)
         if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
             abort(400, "end time must be after start time")
+        target = _live_trip(sid, day_key, raw_row)
         session.append_event(sid, {
             "type": "manual_time", "raw_row": int(raw_row),
-            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
+            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key,
+            # pins WHICH trip this window was typed for: a merged trip inherits
+            # its lowest member's raw_row, so without this the op would later
+            # shrink the merge back to this leg (engine.proposals._op_targets)
+            "merged_rows": sorted(target.absorbed) if target is not None else []})
         return _state(sid)
 
     @app.post("/api/<sid>/manual_reposition")
@@ -576,22 +604,18 @@ def create_app() -> Flask:
         except (KeyError, TypeError, ValueError):
             abort(400, "require lat, lon")
 
-        trips = state.day_trips(sid, day_key)
-        if not trips:
-            abort(404, "unknown day")
-        events = session.read_events(sid)
-        accepted = {fid for fid, r in decisions.resolutions(events).items()
-                    if r in decisions.APPLY_RESOLUTIONS}
-        ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
-        live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
-        target = next((t for t in live_trips if t.raw_row == int(raw_row)), None)
+        target = _live_trip(sid, day_key, raw_row)
         if target is None:
             abort(404, "unknown trip")
 
         route_triplets = _build_reposition_route(target, end, lat, lon)
         session.append_event(sid, {
             "type": "manual_reposition", "raw_row": int(raw_row), "end": end,
-            "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key})
+            "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key,
+            # the target's merge membership right now: a merged trip inherits its
+            # lowest member's raw_row, so this pins WHICH trip the op meant (see
+            # engine.proposals._op_targets)
+            "merged_rows": sorted(target.absorbed)})
         return _state(sid)
 
     @app.post("/api/<sid>/day_include")
@@ -622,6 +646,23 @@ def create_app() -> Flask:
             abort(400, "Flags must be addressed (accepted or waived) before marking this day as cleaned.")
         session.append_event(sid, {"type": "day_cleaned", "day_key": day_key,
                                    "cleaned": cleaned})
+        return _state(sid)
+
+    @app.post("/api/<sid>/comment")
+    def api_comment(sid):
+        """Attach (or clear) a free-text note on ONE trip. Sticky like day_include,
+        outside the undo/redo LIFO -- see `decisions.trip_comments`. An empty
+        string clears the note. Accepts any raw_row, including a manually-added
+        trip's negative one."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key, raw_row = body.get("day_key"), body.get("raw_row")
+        comment = body.get("comment")
+        if not day_key or raw_row is None or not isinstance(comment, str):
+            abort(400, "require day_key, raw_row and comment (string)")
+        session.append_event(sid, {"type": "trip_comment", "day_key": day_key,
+                                   "raw_row": int(raw_row), "comment": comment.strip()})
         return _state(sid)
 
     @app.post("/api/<sid>/undo")

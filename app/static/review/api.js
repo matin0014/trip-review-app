@@ -33,6 +33,7 @@ export function loadDays(){
   S.cur.person = (lastPerson && S.byPerson[lastPerson]) ? lastPerson : ps[0];
   if(S.cur.person === lastPerson) S.cur.key = lastKey;
   personSel.value = S.cur.person;
+  renderProgress();
   fillDays();
  });
 }
@@ -57,6 +58,31 @@ const personOptionLabel = p => `${p}  (${S.byPerson[p].length}d)`+(personAllClea
 function refreshPersonOption(person){
  const opt = [...personSel.options].find(o=>o.value===person);
  if(opt) opt.textContent = personOptionLabel(person);
+}
+
+// Live cleaning progress for the WHOLE session, under the day-cleaned checkbox.
+// Excluded days need no review, so they're kept out of both the numerator and the
+// denominator; a participant counts as done on the SAME rule as their dropdown ✓
+// (every active day checked off), so the numbers always agree with the checkmarks.
+// A participant whose days are all excluded has nothing to review and is left out
+// entirely, rather than sitting in "remaining" forever.
+export function renderProgress(){
+ const el = $('progress');
+ if(!el) return;
+ let daysDone=0, daysLeft=0, peopleDone=0, peopleTotal=0;
+ Object.keys(S.byPerson).forEach(p=>{
+  const active = (S.byPerson[p]||[]).filter(x=>!x.excluded);
+  if(!active.length) return;
+  peopleTotal++;
+  const done = active.filter(x=>x.cleaned).length;
+  daysDone += done;
+  daysLeft += active.length - done;
+  if(done === active.length) peopleDone++;
+ });
+ const row = (k,v) => `<div class="prow"><span>${k}</span><span class="pval">${v}</span></div>`;
+ el.innerHTML = row('Days cleaned', daysDone) + row('Days remaining', daysLeft)
+   + row('Participants cleaned', peopleDone)
+   + row('Participants remaining', peopleTotal - peopleDone);
 }
 
 // Day-list filter: which days the picker shows. "removed" carries the live count.
@@ -154,6 +180,7 @@ export function refreshDays(){
    if(u){ e.excluded=u.excluded; e.out_of_region=u.out_of_region; e.n_flags=u.n_flags; e.cleaned=u.cleaned; }
   }));
   refreshPersonOption(S.cur.person);
+  renderProgress();   // day/person counts move as days get checked off
   fillDays();
  });
 }
@@ -161,7 +188,7 @@ export function refreshDays(){
 // keep=true preserves the current show/hide + selection across a decision
 // (a fresh day load resets them). fit=true re-frames the map (day/person switch).
 export function loadDay(fit=true, keep=false){
- if(!keep){S.hidden=new Set(); S.sel=null; S.resolvedOpen=false; S.editsOpen=false;}
+ if(!keep){S.hidden=new Set(); S.sel=new Set(); S.selId=new Set(); S.resolvedOpen=false; S.editsOpen=false;}
  fetch(`/api/${SID}/live-day?key=`+encodeURIComponent(S.cur.key)).then(r=>r.json()).then(d=>{
   S.cur.data = d;
   // keep the day dropdown's ⚠ badge in sync with the live pending count
@@ -175,10 +202,13 @@ export function loadDay(fit=true, keep=false){
   renderDayActions(entry);   // recover / delete-day controls for the open day
   if(keep){
    const T=d.trips.length; S.hidden=new Set([...S.hidden].filter(s=>s<=T));
-   if(S.followSel && S.selId!=null){           // re-bind selection by stable id (raw_row)
-    const hit = d.trips.find(t=>t.id===S.selId);
-    S.sel = hit ? hit.seq : null; if(!hit) S.selId=null;
-   } else if(S.sel!=null&&S.sel>T) S.sel=null;
+   if(S.followSel && S.selId.size){   // re-bind each expanded trip by stable id (raw_row)
+    const seqs = new Set(), ids = new Set();
+    d.trips.forEach(t=>{ if(S.selId.has(t.id)){ seqs.add(t.seq); ids.add(t.id); } });
+    S.sel = seqs; S.selId = ids;      // rows that vanished (merged away) simply drop out
+   } else {
+    S.sel = new Set([...S.sel].filter(s=>s<=T));
+   }
   }
   else{rFrom.value=1; rTo.value=d.trips.length;}
   $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
@@ -217,7 +247,11 @@ export function manualTime(rawRow, startTime, endTime, dayKey){
      day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 export function manualMerge(rawRows, dayKey){
- S.selId = Math.min(...rawRows);   // select the merged result (its raw_row = min)
+ // If any member was expanded, follow the surviving merged trip (raw_row = min);
+ // trips expanded elsewhere on the day stay expanded.
+ const wasOpen = rawRows.some(r=>S.selId.has(r));
+ rawRows.forEach(r=>S.selId.delete(r));
+ if(wasOpen) S.selId.add(Math.min(...rawRows));
  fetch(`/api/${SID}/manual_merge`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_rows:rawRows, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
@@ -231,6 +265,14 @@ export function manualSplit(rawRow, splitTime, modeA, modeB, dayKey){
 export function manualAdd(payload){
  fetch(`/api/${SID}/manual_add`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify(payload)}).then(()=>loadDay(false,true));
+}
+
+// Attach (or clear, with an empty string) the reviewer's note on one trip. Not a
+// geometry edit, so it never re-runs the cascade -- but loadDay refreshes the
+// panel so the saved note shows immediately.
+export function setComment(rawRow, comment, dayKey){
+ fetch(`/api/${SID}/comment`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({raw_row:rawRow, comment, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 
 export function manualReposition(rawRow, end, lat, lon, dayKey){

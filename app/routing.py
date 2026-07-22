@@ -97,6 +97,53 @@ def _query(profile: str, start_lat: float, start_lon: float,
     }
 
 
+# A merge seam wider than this gets a routed path; below it the "gap" is GPS
+# jitter at a fragment boundary, where a street detour would be noise. Matches the
+# engine's 200 m contiguity gate (`engine.params.gate_m`), so "far enough apart to
+# need a route" means the same thing here as it does to the classifier.
+_GAP_FILL_M = 200.0
+
+
+def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M):
+    """Route the SEAMS of a merged trip through OSM streets.
+
+    A merge concatenates its legs' real breadcrumbs and inserts nothing between
+    them, so a merge across a real gap both draws and measures as a single
+    straight line from one leg's last fix to the next leg's first fix. This asks
+    OSRM for the street path across each seam and splices it in, timestamps spread
+    evenly across that seam's own span.
+
+    Guards, because the input is real GPS and this SYNTHESIZES geometry:
+      * only merged trips (``absorbed``) are touched -- an unmerged trip's jumps
+        are its own data, not a seam;
+      * an N-leg merge has at most N-1 seams, so a route with MORE large jumps
+        than that is GPS ping-pong (a phone alternating between a real fix and a
+        cell-tower fix), and is left completely alone rather than fabricating a
+        route across noise;
+      * any OSRM failure degrades to the existing straight line.
+
+    The inserted points are synthesized, not observed -- the same trade already
+    made for a hand-added trip's route.
+    """
+    legs = len(t.absorbed)
+    route = t.route or []
+    if legs < 2 or len(route) < 2:
+        return t
+    gaps = [i for i, (a, b) in enumerate(zip(route, route[1:]))
+            if haversine_m(a.lat, a.lon, b.lat, b.lon) > min_gap_m]
+    if not gaps or len(gaps) > legs - 1:
+        return t
+
+    out = [route[0]]
+    for i, (prev, cur) in enumerate(zip(route, route[1:])):
+        if i in set(gaps):
+            coords = osrm_route(prev.lat, prev.lon, cur.lat, cur.lon, t.mode)
+            # drop the routed endpoints: they duplicate the real fixes we keep
+            out.extend(_route_from_coords(coords, prev.ts, cur.ts)[1:-1])
+        out.append(cur)
+    return replace(t, route=out) if len(out) != len(route) else t
+
+
 def route_trip(t):
     """Fill an OSM street path into a route-less SYNTHESIZED trip (a missing-trip
     stub, or a manual add whose add-time routing failed), so it follows real streets
