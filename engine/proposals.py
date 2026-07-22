@@ -132,6 +132,7 @@ def apply_manual_ops(trips: list, ops: list) -> list:
     stable negative raw_row) and no-op the second time through.
     """
     add_n = 0
+    merged_before: set = set()   # rows a manual_merge earlier in this list folded
     for op in ops:
         kind = op.get("type")
         if kind == "manual_delete":
@@ -143,6 +144,7 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             if len(to_merge) >= 2:
                 trips = sorted(rest + [_merge_group(to_merge)],
                                key=lambda t: (str(t.person), t.start_ts))
+            merged_before |= raw_rows   # later edits on these rows mean the MERGED trip
         elif kind == "manual_split":
             trips = _apply_split(trips, op)
         elif kind == "manual_add":
@@ -158,7 +160,7 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             row = op["raw_row"]
             out = []
             for t in trips:
-                if t.raw_row == row:
+                if t.raw_row == row and _op_targets(op, t, merged_before):
                     tz = t.start_ts.tzinfo
                     new_start = _split_datetime(op["start_ts"], tz)
                     new_end = _split_datetime(op["end_ts"], tz)
@@ -173,30 +175,38 @@ def apply_manual_ops(trips: list, ops: list) -> list:
             fields = ({"start_lat": op["lat"], "start_lon": op["lon"]} if end == "start"
                       else {"end_lat": op["lat"], "end_lon": op["lon"]})
             trips = [replace(t, route=pts, **fields)
-                     if t.raw_row == row and _reposition_targets(op, t) else t
+                     if t.raw_row == row and _op_targets(op, t, merged_before) else t
                      for t in trips]
     return trips
 
 
-def _reposition_targets(op: dict, trip) -> bool:
-    """Is `trip` still the trip this reposition was aimed at?
+def _op_targets(op: dict, trip, merged_before: set) -> bool:
+    """Is `trip` still the trip this op was aimed at?
 
     A merged trip inherits its lowest member's raw_row, so after ``reposition(3)``
-    then ``merge(3, 4)`` the merged trip ALSO has raw_row 3. Re-applying the op on
-    the next cascade round would then overwrite the merged trip's combined route
-    (and end point) with the stale route stored for the un-merged trip 3 -- the
-    merged trip would keep the merge's times and purpose but only leg 3's geometry.
+    (or ``time(3)``) then ``merge(3, 4)`` the merged trip ALSO has raw_row 3. On the
+    next cascade round the op would hit the MERGED trip: a reposition overwrites its
+    combined route with the stale single-leg one, a time edit shrinks its span back
+    to the un-merged leg's window. Both silently drop half the merge.
 
-    The op records the target's merge membership (`merged_rows`) at creation time,
-    so a reposition made against a MERGED trip still re-applies to it, while one
-    made before the merge stops at the merge. Ops logged before that field existed
-    fall back to "only if this trip is not a merge product", which is what they
-    were always aimed at.
+    But the OPPOSITE order is legitimate -- merge first, then edit the merged trip --
+    and must keep applying. Two signals disambiguate:
+
+      * ``merged_rows``, recorded on the op at creation time, is authoritative: it
+        pins exactly which trip (merged or not) the reviewer was looking at.
+      * for ops logged before that field existed, `merged_before` says whether a
+        ``manual_merge`` EARLIER in this same op list already folded this row -- i.e.
+        whether the edit came after the merge and therefore meant the merged trip.
+
+    Label-only ops (mode/purpose) deliberately skip this: relabelling every member of
+    a merge is the intended behaviour there.
     """
     absorbed = sorted(trip.absorbed)
-    if "merged_rows" not in op:
-        return not absorbed
-    return sorted(op["merged_rows"] or []) == absorbed
+    if "merged_rows" in op:
+        return sorted(op["merged_rows"] or []) == absorbed
+    if not absorbed:
+        return True                            # a plain trip is always the right target
+    return op.get("raw_row") in merged_before  # legacy: only if the merge came first
 
 
 def _points_from_triplets(triplets: list) -> list:

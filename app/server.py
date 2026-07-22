@@ -108,6 +108,24 @@ def _live_pending_counts(sid: str) -> dict:
     return counts
 
 
+def _live_trip(sid: str, day_key: str, raw_row: int):
+    """The LIVE (post-fixpoint) trip with `raw_row` on this day, or None.
+
+    Used by the edits that must record what they were aimed at: a merged trip
+    inherits its lowest member's raw_row, so `trip.absorbed` is what
+    distinguishes "the merged trip" from "the un-merged leg" when the op is
+    replayed (see `engine.proposals._op_targets`)."""
+    trips = state.day_trips(sid, day_key)
+    if not trips:
+        return None
+    events = session.read_events(sid)
+    accepted = {fid for fid, r in decisions.resolutions(events).items()
+                if r in decisions.APPLY_RESOLUTIONS}
+    ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
+    live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
+    return next((t for t in live_trips if t.raw_row == int(raw_row)), None)
+
+
 def _day_pending_count(sid: str, day_key: str) -> int:
     """Flags still PENDING in the live projection for ONE person-day -- the same
     rule as `_live_pending_counts`, scoped to a single day so checking the
@@ -558,9 +576,14 @@ def create_app() -> Flask:
         end_ts = _combine_dt(day_key, end_time)
         if end_ts <= start_ts:  # ISO instants share the day_key date -> string compare is chronological
             abort(400, "end time must be after start time")
+        target = _live_trip(sid, day_key, raw_row)
         session.append_event(sid, {
             "type": "manual_time", "raw_row": int(raw_row),
-            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key})
+            "start_ts": start_ts, "end_ts": end_ts, "day_key": day_key,
+            # pins WHICH trip this window was typed for: a merged trip inherits
+            # its lowest member's raw_row, so without this the op would later
+            # shrink the merge back to this leg (engine.proposals._op_targets)
+            "merged_rows": sorted(target.absorbed) if target is not None else []})
         return _state(sid)
 
     @app.post("/api/<sid>/manual_reposition")
@@ -580,15 +603,7 @@ def create_app() -> Flask:
         except (KeyError, TypeError, ValueError):
             abort(400, "require lat, lon")
 
-        trips = state.day_trips(sid, day_key)
-        if not trips:
-            abort(404, "unknown day")
-        events = session.read_events(sid)
-        accepted = {fid for fid, r in decisions.resolutions(events).items()
-                    if r in decisions.APPLY_RESOLUTIONS}
-        ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
-        live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
-        target = next((t for t in live_trips if t.raw_row == int(raw_row)), None)
+        target = _live_trip(sid, day_key, raw_row)
         if target is None:
             abort(404, "unknown trip")
 
@@ -598,7 +613,7 @@ def create_app() -> Flask:
             "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key,
             # the target's merge membership right now: a merged trip inherits its
             # lowest member's raw_row, so this pins WHICH trip the op meant (see
-            # engine.proposals._reposition_targets)
+            # engine.proposals._op_targets)
             "merged_rows": sorted(target.absorbed)})
         return _state(sid)
 

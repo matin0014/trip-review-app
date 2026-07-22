@@ -487,6 +487,38 @@ def test_reposition_logged_against_a_merged_trip_still_applies():
     assert trips[0].route[-1].lon == 30.0
 
 
+def test_time_edit_before_a_merge_does_not_shrink_the_merged_span():
+    # Regression: the merged trip inherits leg 1's raw_row, so re-applying a time
+    # edit aimed at leg 1 forced the MERGED trip's window back to that leg's --
+    # silently dropping the part of the merge outside it (and re-timing its route).
+    ops = [
+        {"type": "manual_time", "raw_row": 1,
+         "start_ts": at(0).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(8).strftime("%Y-%m-%dT%H:%M:%S")},
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+    ]
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    for _ in range(3):
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    assert trips[0].start_ts == at(0) and trips[0].end_ts == at(20)   # FULL merged span
+
+
+def test_time_edit_after_a_merge_still_retimes_the_merged_trip():
+    # the opposite order: the reviewer merged, then edited the merged trip's times.
+    ops = [
+        {"type": "manual_merge", "raw_rows": [1, 2]},
+        {"type": "manual_time", "raw_row": 1,
+         "start_ts": at(2).strftime("%Y-%m-%dT%H:%M:%S"),
+         "end_ts": at(25).strftime("%Y-%m-%dT%H:%M:%S")},
+    ]
+    trips = [mk(1, 0, 10), mk(2, 12, 20)]
+    for _ in range(3):
+        trips = apply_manual_ops(trips, ops)
+    assert len(trips) == 1
+    assert trips[0].start_ts == at(2) and trips[0].end_ts == at(25)   # edit took effect
+
+
 def test_reposition_is_idempotent():
     kept = [RoutePoint(0.0, float(m), at(m)) for m in range(0, 6)]
     patch = [RoutePoint(0.0, 6.0, at(6)), RoutePoint(0.0, 9.0, at(10))]
