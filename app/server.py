@@ -595,7 +595,11 @@ def create_app() -> Flask:
         route_triplets = _build_reposition_route(target, end, lat, lon)
         session.append_event(sid, {
             "type": "manual_reposition", "raw_row": int(raw_row), "end": end,
-            "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key})
+            "lat": lat, "lon": lon, "route": route_triplets, "day_key": day_key,
+            # the target's merge membership right now: a merged trip inherits its
+            # lowest member's raw_row, so this pins WHICH trip the op meant (see
+            # engine.proposals._reposition_targets)
+            "merged_rows": sorted(target.absorbed)})
         return _state(sid)
 
     @app.post("/api/<sid>/day_include")

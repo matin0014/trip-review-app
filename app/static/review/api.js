@@ -161,7 +161,7 @@ export function refreshDays(){
 // keep=true preserves the current show/hide + selection across a decision
 // (a fresh day load resets them). fit=true re-frames the map (day/person switch).
 export function loadDay(fit=true, keep=false){
- if(!keep){S.hidden=new Set(); S.sel=null; S.resolvedOpen=false; S.editsOpen=false;}
+ if(!keep){S.hidden=new Set(); S.sel=new Set(); S.selId=new Set(); S.resolvedOpen=false; S.editsOpen=false;}
  fetch(`/api/${SID}/live-day?key=`+encodeURIComponent(S.cur.key)).then(r=>r.json()).then(d=>{
   S.cur.data = d;
   // keep the day dropdown's ⚠ badge in sync with the live pending count
@@ -175,10 +175,13 @@ export function loadDay(fit=true, keep=false){
   renderDayActions(entry);   // recover / delete-day controls for the open day
   if(keep){
    const T=d.trips.length; S.hidden=new Set([...S.hidden].filter(s=>s<=T));
-   if(S.followSel && S.selId!=null){           // re-bind selection by stable id (raw_row)
-    const hit = d.trips.find(t=>t.id===S.selId);
-    S.sel = hit ? hit.seq : null; if(!hit) S.selId=null;
-   } else if(S.sel!=null&&S.sel>T) S.sel=null;
+   if(S.followSel && S.selId.size){   // re-bind each expanded trip by stable id (raw_row)
+    const seqs = new Set(), ids = new Set();
+    d.trips.forEach(t=>{ if(S.selId.has(t.id)){ seqs.add(t.seq); ids.add(t.id); } });
+    S.sel = seqs; S.selId = ids;      // rows that vanished (merged away) simply drop out
+   } else {
+    S.sel = new Set([...S.sel].filter(s=>s<=T));
+   }
   }
   else{rFrom.value=1; rTo.value=d.trips.length;}
   $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
@@ -217,7 +220,11 @@ export function manualTime(rawRow, startTime, endTime, dayKey){
      day_key:dayKey})}).then(()=>loadDay(false,true));
 }
 export function manualMerge(rawRows, dayKey){
- S.selId = Math.min(...rawRows);   // select the merged result (its raw_row = min)
+ // If any member was expanded, follow the surviving merged trip (raw_row = min);
+ // trips expanded elsewhere on the day stay expanded.
+ const wasOpen = rawRows.some(r=>S.selId.has(r));
+ rawRows.forEach(r=>S.selId.delete(r));
+ if(wasOpen) S.selId.add(Math.min(...rawRows));
  fetch(`/api/${SID}/manual_merge`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_rows:rawRows, day_key:dayKey})}).then(()=>loadDay(false,true));
 }
