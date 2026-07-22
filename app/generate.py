@@ -402,6 +402,7 @@ def _apply_merge_overrides(df, merge_overrides: dict) -> None:
         i = raw_row - 1
         if not (0 <= i < len(df)):
             continue
+        t = routing.fill_route_gaps(t)   # street path across the merge seam
         vals = {
             "end_date": t.end_ts.strftime("%Y-%m-%d"),
             "end_time": _fmt_time(t.end_ts),

@@ -397,6 +397,7 @@ def create_app() -> Flask:
         ops = [op for op in decisions.manual_ops(all_events) if op.get("day_key") == key]
         live_trips, surfaced = decisions.fixpoint(trips, accepted, ops=ops)
         live_trips = [routing.route_trip(t) for t in live_trips]  # OSM path for stubs
+        live_trips = [routing.fill_route_gaps(t) for t in live_trips]  # route a merge seam
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 
