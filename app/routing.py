@@ -97,14 +97,22 @@ def _query(profile: str, start_lat: float, start_lon: float,
     }
 
 
-# A merge seam wider than this gets a routed path; below it the "gap" is GPS
-# jitter at a fragment boundary, where a street detour would be noise. Matches the
-# engine's 200 m contiguity gate (`engine.params.gate_m`), so "far enough apart to
-# need a route" means the same thing here as it does to the classifier.
+# A seam must clear BOTH thresholds to be routed. Distance matches the engine's
+# 200 m contiguity gate (`engine.params.gate_m`); time matches its
+# `short_gap_fragment_min` (3 min), the existing "long enough to be a real gap
+# rather than one sampling interval" constant.
+#
+# The time test is what makes this safe on real data: in wave 2, 19,824 pairs of
+# CONSECUTIVE fixes inside a single trip are already >200 m apart (sparse sampling
+# and cell-tower jitter), and 94% of those are under a minute apart. Routing on
+# distance alone would fabricate street paths across all of them the moment such a
+# trip was merged -- and, because a split partitions a route by timestamp, would
+# make split-then-merge silently insert points the original never had.
 _GAP_FILL_M = 200.0
+_GAP_FILL_S = 180.0
 
 
-def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M):
+def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_FILL_S):
     """Route the SEAMS of a merged trip through OSM streets.
 
     A merge concatenates its legs' real breadcrumbs and inserts nothing between
@@ -116,6 +124,11 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M):
     Guards, because the input is real GPS and this SYNTHESIZES geometry:
       * only merged trips (``absorbed``) are touched -- an unmerged trip's jumps
         are its own data, not a seam;
+      * a seam must be far apart AND separated in time: two consecutive fixes
+        seconds apart are one sampling interval (or tower jitter), never an
+        unlogged journey. This is also what keeps split-then-merge lossless --
+        a split partitions the route by timestamp, so re-merging it sees only
+        sampling-interval seams and restores the original exactly;
       * an N-leg merge has at most N-1 seams, so a route with MORE large jumps
         than that is GPS ping-pong (a phone alternating between a real fix and a
         cell-tower fix), and is left completely alone rather than fabricating a
@@ -130,7 +143,8 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M):
     if legs < 2 or len(route) < 2:
         return t
     gaps = [i for i, (a, b) in enumerate(zip(route, route[1:]))
-            if haversine_m(a.lat, a.lon, b.lat, b.lon) > min_gap_m]
+            if haversine_m(a.lat, a.lon, b.lat, b.lon) > min_gap_m
+            and (b.ts - a.ts).total_seconds() >= min_gap_s]
     if not gaps or len(gaps) > legs - 1:
         return t
 

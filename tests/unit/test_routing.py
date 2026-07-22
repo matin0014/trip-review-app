@@ -87,11 +87,12 @@ def _dlon(m):
     return m / _ONE_DEG_M
 
 
-def _leg(row, start_min, pts_from_m, absorbed=frozenset()):
-    """A trip whose breadcrumbs march east, one per minute from `start_min`."""
-    route = [RoutePoint(49.26, -123.12 + _dlon(x), _BASE + timedelta(minutes=start_min + i))
-             for i, x in enumerate(pts_from_m)]
-    return Trip(raw_row=row, person="p", mode="Walk", purpose="",
+def _trip(pairs, absorbed=frozenset()):
+    """A trip from ``[(metres_east, minute), ...]`` breadcrumbs, so a test can set
+    a seam's distance AND its time gap independently."""
+    route = [RoutePoint(49.26, -123.12 + _dlon(x), _BASE + timedelta(minutes=m))
+             for x, m in pairs]
+    return Trip(raw_row=1, person="p", mode="Walk", purpose="",
                 start_ts=route[0].ts, end_ts=route[-1].ts,
                 start_lat=49.26, start_lon=route[0].lon,
                 end_lat=49.26, end_lon=route[-1].lon,
@@ -110,7 +111,10 @@ def _fake_osrm(monkeypatch, n_mid=4):
 
 def test_fill_route_gaps_splices_a_path_across_the_seam(monkeypatch):
     _fake_osrm(monkeypatch)
-    merged = _leg(1, 0, [0, 40, 80, 3400, 3440], absorbed=frozenset({1, 2}))
+    # leg A ends at 2 min / 80 m; leg B starts at 30 min / 3400 m -- far apart AND
+    # 28 minutes of unlogged travel, the case worth routing
+    merged = _trip([(0, 0), (40, 1), (80, 2), (3400, 30), (3440, 31)],
+                   absorbed=frozenset({1, 2}))
     out = routing.fill_route_gaps(merged)
     assert len(out.route) == len(merged.route) + 4          # 4 routed points spliced in
     assert out.route[0].lon == merged.route[0].lon          # real fixes preserved
@@ -120,28 +124,47 @@ def test_fill_route_gaps_splices_a_path_across_the_seam(monkeypatch):
 
 def test_fill_route_gaps_ignores_an_unmerged_trip(monkeypatch):
     _fake_osrm(monkeypatch)
-    plain = _leg(1, 0, [0, 40, 3400])          # a big jump, but absorbed is empty
+    plain = _trip([(0, 0), (40, 1), (3400, 30)])           # a real gap, but not merged
     assert routing.fill_route_gaps(plain).route == plain.route
 
 
 def test_fill_route_gaps_leaves_small_seams_alone(monkeypatch):
     _fake_osrm(monkeypatch)
     # a fragment merge's seam is metres of GPS jitter -- routing it would be noise
-    merged = _leg(1, 0, [0, 40, 80, 120], absorbed=frozenset({1, 2}))
+    merged = _trip([(0, 0), (40, 1), (80, 30), (120, 31)], absorbed=frozenset({1, 2}))
     assert routing.fill_route_gaps(merged).route == merged.route
 
 
-def test_fill_route_gaps_skips_gps_ping_pong(monkeypatch):
-    # More large jumps than a 2-leg merge can have seams (1) -> this is a phone
-    # alternating between a real fix and a tower fix, so fabricate nothing.
+def test_fill_route_gaps_ignores_a_far_jump_that_is_seconds_apart(monkeypatch):
+    # 3 km between two fixes 30 s apart is sparse sampling / tower jitter, not an
+    # unlogged journey -- 94% of >200 m jumps in the real wave data look like this.
     _fake_osrm(monkeypatch)
-    noisy = _leg(1, 0, [0, 4000, 40, 4040, 80], absorbed=frozenset({1, 2}))
+    merged = _trip([(0, 0), (3000, 0.5), (3040, 30)], absorbed=frozenset({1, 2}))
+    assert routing.fill_route_gaps(merged).route == merged.route
+
+
+def test_split_then_merge_restores_the_route_exactly(monkeypatch):
+    # A split partitions a route by timestamp, so re-merging the pieces must give
+    # back the original -- even when the trip contains a big internal jump. The
+    # time test is what guarantees it (the seam is one sampling interval).
+    _fake_osrm(monkeypatch)
+    original = _trip([(0, 0), (30, 0.5), (3060, 1), (3090, 1.5)],
+                     absorbed=frozenset({1, 2}))
+    assert routing.fill_route_gaps(original).route == original.route
+
+
+def test_fill_route_gaps_skips_gps_ping_pong(monkeypatch):
+    # More large seams than a 2-leg merge can have (1) -> a phone alternating
+    # between a real fix and a tower fix, so fabricate nothing.
+    _fake_osrm(monkeypatch)
+    noisy = _trip([(0, 0), (4000, 10), (40, 20), (4040, 30), (80, 40)],
+                  absorbed=frozenset({1, 2}))
     assert routing.fill_route_gaps(noisy).route == noisy.route
 
 
 def test_fill_route_gaps_degrades_when_osrm_fails(monkeypatch):
     monkeypatch.setattr(routing, "osrm_route", lambda *a, **k: [])
-    merged = _leg(1, 0, [0, 40, 3400], absorbed=frozenset({1, 2}))
+    merged = _trip([(0, 0), (40, 1), (3400, 30)], absorbed=frozenset({1, 2}))
     assert routing.fill_route_gaps(merged).route == merged.route   # straight line stands
 
 
