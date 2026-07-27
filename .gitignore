@@ -12,7 +12,10 @@ venv/
 sessions/
 
 # Raw participant data (privacy-sensitive; never commit)
-data/
+# (data/* not data/, so the one public asset below can be re-included)
+data/*
+# ...except the public SkyTrain track geometry the app bundles (TransLink GTFS)
+!data/skytrain.geojson
 
 # Build artifacts
 build/
