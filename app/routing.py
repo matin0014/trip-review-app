@@ -159,20 +159,57 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_F
     return replace(t, route=out) if len(out) != len(route) else t
 
 
+# Beyond this from the nearest track, a "SkyTrain" trip is not a Metro Vancouver
+# trip at all (e.g. an Okanagan participant), so we don't force it onto the rail;
+# it falls back to an ordinary OSRM route between the clicked points.
+_RAIL_MAX_ACCESS_M = 30_000.0
+# A clicked point this close to the boarding/alighting point needs no access leg.
+_RAIL_SNAP_SKIP_M = 120.0
+
+
+def _concat(*chunks) -> list:
+    """Join coordinate chunks, dropping points that coincide with the previous one
+    (the access leg's end == the boarding point == the rail's first point, etc.)."""
+    out: list = []
+    for chunk in chunks:
+        for lat, lon in chunk:
+            if not out or haversine_m(out[-1][0], out[-1][1], lat, lon) > 1.0:
+                out.append([lat, lon])
+    return out
+
+
 def route_between(mode: str, start_lat: float, start_lon: float,
                   end_lat: float, end_lon: float) -> list:
     """Best ``[[lat, lon], ...]`` geometry between two clicked points for a manual
-    add: the real SkyTrain track for a SkyTrain trip (`app.rail`, offline), else
-    the OSRM street path. Empty on failure, so the caller draws a straight line.
+    add. Empty on failure, so the caller draws a straight line.
 
-    SkyTrain is snapped rather than routed on roads because the OSRM public server
-    has no rail profile -- a SkyTrain trip would otherwise follow streets (and
-    cross bridges/water the train does not). Falls through to OSRM when the clicked
-    points are nowhere near the rail network."""
+    A SkyTrain trip is modelled as walk-to-station -> ride -> walk-to-destination:
+    OSRM routes the access leg (clicked start -> nearest point on the best line)
+    and the egress leg (alighting point -> clicked end), with the real track
+    (`app.rail`, offline) in between. This is because the OSRM public server has no
+    rail profile, so the ride itself would otherwise follow roads (and cross
+    water/bridges the train does not). If the nearest line is unreasonably far, the
+    trip isn't really on the network and falls back to a plain OSRM route.
+
+    Every other mode is just the OSRM street path between the two points."""
     if mode == "SkyTrain":
-        snapped = rail.snap_route(start_lat, start_lon, end_lat, end_lon)
-        if snapped:
-            return snapped
+        seg = rail.nearest_rail_segment(start_lat, start_lon, end_lat, end_lon)
+        if seg is not None and max(seg["access_m"], seg["egress_m"]) < _RAIL_MAX_ACCESS_M:
+            b_lat, b_lon = seg["board"]
+            a_lat, a_lon = seg["alight"]
+            # access: clicked start -> boarding point (walk); skip if already there
+            if seg["access_m"] <= _RAIL_SNAP_SKIP_M:
+                access = [[start_lat, start_lon], [b_lat, b_lon]]
+            else:
+                access = (osrm_route(start_lat, start_lon, b_lat, b_lon, "Walk")
+                          or [[start_lat, start_lon], [b_lat, b_lon]])
+            # egress: alighting point -> clicked end (walk)
+            if seg["egress_m"] <= _RAIL_SNAP_SKIP_M:
+                egress = [[a_lat, a_lon], [end_lat, end_lon]]
+            else:
+                egress = (osrm_route(a_lat, a_lon, end_lat, end_lon, "Walk")
+                          or [[a_lat, a_lon], [end_lat, end_lon]])
+            return _concat(access, seg["rail"], egress)
     return osrm_route(start_lat, start_lon, end_lat, end_lon, mode)
 
 
