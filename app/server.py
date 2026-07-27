@@ -549,9 +549,10 @@ def create_app() -> Flask:
         s_lat, s_lon = float(body["start_lat"]), float(body["start_lon"])
         e_lat, e_lon = float(body["end_lat"]), float(body["end_lon"])
         mode = body.get("mode") or "Unknown"
-        # OSM shortest path between the two clicked points, computed once and stored
-        # in the op so the pure engine just materialises it (empty -> straight line).
-        route = routing.osrm_route(s_lat, s_lon, e_lat, e_lon, mode)
+        # Path between the two clicked points, computed once and stored in the op so
+        # the pure engine just materialises it (empty -> straight line): the real
+        # SkyTrain track for a SkyTrain trip, else the OSM street path.
+        route = routing.route_between(mode, s_lat, s_lon, e_lat, e_lon)
         session.append_event(sid, {
             "type": "manual_add",
             "add_seq": _next_add_seq(sid, day_key),

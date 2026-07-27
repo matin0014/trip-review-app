@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import replace
 
+from app import rail
 from engine.geo import haversine_m
 from engine.proposals import _route_from_coords
 
@@ -156,6 +157,23 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_F
             out.extend(_route_from_coords(coords, prev.ts, cur.ts)[1:-1])
         out.append(cur)
     return replace(t, route=out) if len(out) != len(route) else t
+
+
+def route_between(mode: str, start_lat: float, start_lon: float,
+                  end_lat: float, end_lon: float) -> list:
+    """Best ``[[lat, lon], ...]`` geometry between two clicked points for a manual
+    add: the real SkyTrain track for a SkyTrain trip (`app.rail`, offline), else
+    the OSRM street path. Empty on failure, so the caller draws a straight line.
+
+    SkyTrain is snapped rather than routed on roads because the OSRM public server
+    has no rail profile -- a SkyTrain trip would otherwise follow streets (and
+    cross bridges/water the train does not). Falls through to OSRM when the clicked
+    points are nowhere near the rail network."""
+    if mode == "SkyTrain":
+        snapped = rail.snap_route(start_lat, start_lon, end_lat, end_lon)
+        if snapped:
+            return snapped
+    return osrm_route(start_lat, start_lon, end_lat, end_lon, mode)
 
 
 def route_trip(t):
