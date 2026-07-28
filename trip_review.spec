@@ -14,8 +14,10 @@ a = Analysis(
         # to match app.server._app_dir()'s sys._MEIPASS/app/... resolution.
         ('app/templates', 'app/templates'),
         ('app/static', 'app/static'),
-        # public SkyTrain track geometry, read by app.rail (resolves _MEIPASS/data)
+        # public transit route geometry, read by app.rail (resolves _MEIPASS/data)
         ('data/skytrain.geojson', 'data'),
+        ('data/seabus.geojson', 'data'),
+        ('data/kelowna_bus.geojson', 'data'),
     ],
     hiddenimports=[
         # pandas calls this dynamically (engine="openpyxl" string, never a

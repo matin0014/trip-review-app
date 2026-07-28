@@ -88,3 +88,55 @@ def test_non_skytrain_modes_use_osrm_directly(monkeypatch):
                         lambda la, lo, la2, lo2, mode=None: seen.setdefault("mode", mode) or [[la, lo], [la2, lo2]])
     routing.route_between("Walk", *WATERFRONT, *COMMERCIAL_BROADWAY)
     assert seen["mode"] == "Walk"    # passed straight through, no rail detour
+
+
+# --- SeaBus (single line, Metro Vancouver) -----------------------------------
+
+SEABUS_WATERFRONT = (49.28651, -123.110526)   # Vancouver terminal (line's own start point)
+SEABUS_LONSDALE = (49.309322, -123.084112)    # North Vancouver terminal (line's own end point)
+
+
+def test_seabus_snaps_both_ends_onto_the_line():
+    seg = rail.nearest_rail_segment(*SEABUS_WATERFRONT, *SEABUS_LONSDALE, network="seabus")
+    assert seg is not None
+    assert seg["access_m"] < 50 and seg["egress_m"] < 50
+    assert _path_km(seg["rail"]) > 1.0   # crosses the inlet, not a short hop
+
+
+def test_composite_rides_the_seabus(monkeypatch):
+    _fake_osrm(monkeypatch)
+    r = routing.route_between("SeaBus", *SEABUS_WATERFRONT, *SEABUS_LONSDALE)
+    assert r[0] == [SEABUS_WATERFRONT[0], SEABUS_WATERFRONT[1]]
+    assert r[-1] == [SEABUS_LONSDALE[0], SEABUS_LONSDALE[1]]
+
+
+# --- Kelowna bus (28 routes, low overlap) ------------------------------------
+
+KELOWNA_ROUTE1_START = (49.8366, -119.48062)
+KELOWNA_ROUTE1_END = (49.88726, -119.49483)
+OKANAGAN_FAR = (49.75, -119.35)   # within the region but far from route 1
+
+
+def test_kelowna_bus_snaps_onto_a_route():
+    seg = rail.nearest_rail_segment(*KELOWNA_ROUTE1_START, *KELOWNA_ROUTE1_END, network="kelowna_bus")
+    assert seg is not None
+    assert seg["access_m"] < 50 and seg["egress_m"] < 50
+
+
+def test_composite_rides_a_kelowna_bus(monkeypatch):
+    _fake_osrm(monkeypatch)
+    r = routing.route_between("Transit Bus", *KELOWNA_ROUTE1_START, *KELOWNA_ROUTE1_END)
+    assert r[0] == [KELOWNA_ROUTE1_START[0], KELOWNA_ROUTE1_START[1]]
+    assert r[-1] == [KELOWNA_ROUTE1_END[0], KELOWNA_ROUTE1_END[1]]
+    assert len(r) > 10
+
+
+def test_a_vancouver_transit_bus_trip_is_too_far_from_kelowna_and_falls_back(monkeypatch):
+    # Metro Vancouver is ~300 km from Kelowna's network, so a "Transit Bus" trip
+    # there must NOT get silently snapped onto a Kelowna route -- it falls back
+    # to a plain OSRM street route, same as any other mode.
+    called = {}
+    monkeypatch.setattr(routing, "osrm_route",
+                        lambda *a, **k: called.setdefault("hit", True) or [[a[0], a[1]], [a[2], a[3]]])
+    routing.route_between("Transit Bus", *WATERFRONT, *COMMERCIAL_BROADWAY)
+    assert called.get("hit")

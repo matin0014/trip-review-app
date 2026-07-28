@@ -1,21 +1,25 @@
-"""Snap a manually-added SkyTrain trip to the real rail line.
+"""Snap a manually-added transit trip onto real route geometry.
 
-The public OSRM server only routes foot/bike/car, so a hand-added SkyTrain trip
-would otherwise follow roads (see `routing._profiles`). Instead we snap the two
-clicked endpoints onto the actual SkyTrain track geometry (TransLink GTFS, one
-LineString per line in `data/skytrain.geojson`) and return the sub-path of the
-line between them. Pure geometry, no network -- the GeoJSON ships with the app,
-so this works offline.
+The public OSRM server only routes foot/bike/car, so a hand-added SkyTrain,
+SeaBus, or Kelowna bus trip would otherwise follow roads (see
+`routing._profiles`). Instead we snap the two clicked endpoints onto the
+actual route geometry (TransLink / BC Transit GTFS, one LineString per line in
+`data/<network>.geojson`) and return the sub-path between them. Pure geometry,
+no network call -- the GeoJSON ships with the app, so this works offline.
 
-This module is pure geometry (no network): it finds the boarding and alighting
-points on the line and the track segment between them. The caller
+This module is pure geometry: it finds the boarding and alighting points on
+the line and the track/route segment between them. The caller
 (`routing.route_between`) then OSRM-routes the access leg (clicked start ->
-boarding point) and the egress leg (alighting point -> clicked end), so a
-SkyTrain trip reads as walk-to-station -> ride -> walk-to-destination.
+boarding point) and the egress leg (alighting point -> clicked end), so a trip
+reads as walk-to-stop -> ride -> walk-to-destination.
 
 Scope + limits (deliberately a first version):
-  * Only the three rail lines (Expo / Millennium / Canada). SeaBus etc. are not
-    in the data yet.
+  * Three networks: ``skytrain`` (3 rail lines), ``seabus`` (1 line), and
+    ``kelowna_bus`` (28 routes, low overlap -- see the branch history for the
+    ambiguity check that ruled this safe). Metro Vancouver's bus network
+    (238 routes, heavily overlapping, no route number in the survey data) is
+    deliberately NOT here -- nearest-line snapping would silently guess the
+    wrong specific route.
   * A trip rides the SINGLE line whose nearest points to the two endpoints
     minimise the combined off-rail distance. A genuine two-line trip through an
     interchange is approximated by whichever line fits best; a graph across the
@@ -33,28 +37,30 @@ from engine.geo import haversine_m
 
 _R = 6_371_000.0
 _LAT0 = math.radians(49.25)  # metro-Vancouver reference latitude for the planar frame
-_lines: "list | None" = None  # cached [(name, [(lat, lon), ...]), ...]
+
+_NETWORKS = {"skytrain": "skytrain.geojson", "seabus": "seabus.geojson",
+             "kelowna_bus": "kelowna_bus.geojson"}
+_cache: dict = {}  # network -> [(name, [(lat, lon), ...]), ...]
 
 
-def _data_path() -> str:
+def _data_path(network: str) -> str:
     base = getattr(sys, "_MEIPASS", None)
     if base is None:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root in dev
-    return os.path.join(base, "data", "skytrain.geojson")
+    return os.path.join(base, "data", _NETWORKS[network])
 
 
-def _load() -> list:
-    global _lines
-    if _lines is None:
+def _load(network: str) -> list:
+    if network not in _cache:
         try:
-            with open(_data_path(), encoding="utf-8") as fh:
+            with open(_data_path(network), encoding="utf-8") as fh:
                 fc = json.load(fh)
-            _lines = [(f["properties"].get("line", "?"),
-                       [(lat, lon) for lon, lat in f["geometry"]["coordinates"]])
-                      for f in fc.get("features", [])]
+            _cache[network] = [(f["properties"].get("line", "?"),
+                                [(lat, lon) for lon, lat in f["geometry"]["coordinates"]])
+                               for f in fc.get("features", [])]
         except (OSError, ValueError, KeyError):
-            _lines = []
-    return _lines
+            _cache[network] = []
+    return _cache[network]
 
 
 def _xy(lat: float, lon: float) -> tuple:
@@ -87,9 +93,10 @@ def _snap_to_line(lat: float, lon: float, pts: list) -> tuple:
 
 
 def nearest_rail_segment(start_lat: float, start_lon: float,
-                         end_lat: float, end_lon: float) -> "dict | None":
-    """Board/ride/alight geometry for the best-fitting SkyTrain line, or None if
-    no line data is available.
+                         end_lat: float, end_lon: float,
+                         network: str = "skytrain") -> "dict | None":
+    """Board/ride/alight geometry for the best-fitting line in ``network``, or
+    None if no line data is available.
 
     Picks the line whose nearest points to the two clicked endpoints minimise the
     combined off-rail (access + egress) distance, then returns::
@@ -103,8 +110,8 @@ def nearest_rail_segment(start_lat: float, start_lon: float,
     The clicked endpoints are NOT included -- the caller stitches OSRM access and
     egress legs onto ``board`` and ``alight``. There is no tolerance cut-off here:
     a trip that starts far from the network simply gets a long access leg, which
-    the caller may reject if it is unreasonably far (i.e. not a Metro Van trip)."""
-    lines = _load()
+    the caller may reject if it is unreasonably far (i.e. not on this network)."""
+    lines = _load(network)
     if not lines:
         return None
 
