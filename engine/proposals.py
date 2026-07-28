@@ -249,8 +249,9 @@ def _apply_split(trips: list, op: dict) -> list:
     A keeps the origin raw_row; B gets the stable `split_b_row`. The route splits
     by timestamp (<= split -> A, > split -> B); A's end / B's start snap to the
     last/first route breadcrumb on their side (falling back to the origin endpoint
-    when a side has no breadcrumbs). B inherits the origin purpose (the destination
-    semantics, matching how a merge keeps the last piece's purpose); A's is blank.
+    when a side has no breadcrumbs). BOTH halves inherit the origin's purpose --
+    leaving A blank would make it read as a "no purpose" trip (and get swept up by
+    the no-purpose tools), when really it's just one leg of a labelled trip.
     Out-of-range split times and a missing origin are no-ops; an already-applied
     split (B present) is a no-op so the fixpoint loop converges.
     """
@@ -273,7 +274,7 @@ def _apply_split(trips: list, op: dict) -> list:
 
     trip_a = Trip(
         raw_row=orig_row, person=orig.person, mode=op.get("mode_a") or orig.mode,
-        purpose="", start_ts=orig.start_ts, end_ts=split_ts,
+        purpose=orig.purpose, start_ts=orig.start_ts, end_ts=split_ts,
         start_lat=orig.start_lat, start_lon=orig.start_lon,
         end_lat=a_end[0], end_lon=a_end[1], route=a_route,
     )
