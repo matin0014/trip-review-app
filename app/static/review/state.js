@@ -22,6 +22,7 @@ export const S = {
   modeOpen: null,          // seq of the trip whose mode dropdown is expanded
   timeOpen: null,          // seq of the trip whose start/end time editor is open
   commentOpen: null,       // seq of the trip whose comment textarea is open
+  showNoPurpose: true,     // show trips whose purpose is blank ("no purpose")?
   purposeOpen: null,       // seq of the trip whose purpose dropdown is expanded
   flagSel: null,           // expanded flag id (detail open)
   selId: new Set(),        // those trips' raw_rows (stable ids, survive renumber)

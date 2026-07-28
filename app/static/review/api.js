@@ -25,6 +25,7 @@ export function loadDays(){
   const ps = Object.keys(S.byPerson).sort();
   $('pcount').textContent = ps.length+' total';
   ps.forEach(p=>personSel.add(new Option(personOptionLabel(p), p)));
+  renderRemovedSummary();
 
   // Resume where the reviewer left off (last-opened person-day), falling back
   // to the first person if this is a fresh session or that person is gone.
@@ -51,7 +52,26 @@ function personAllCleaned(person){
  const active = (S.byPerson[person]||[]).filter(x=>!x.excluded);
  return active.length>0 && active.every(x=>x.cleaned);
 }
-const personOptionLabel = p => `${p}  (${S.byPerson[p].length}d)`+(personAllCleaned(p)?'  ✓':'');
+const personExcluded = p => (S.byPerson[p]||[]).filter(x=>x.excluded).length;
+// The participant option shows a ⊘N badge when they have removed days, so you can
+// spot who has them from the dropdown without switching the day filter per person.
+const personOptionLabel = p => `${p}  (${S.byPerson[p].length}d)`
+  +(personExcluded(p)?`  ⊘${personExcluded(p)}`:'')+(personAllCleaned(p)?'  ✓':'');
+
+// Session-wide removed-day banner under the participant picker: how many days the
+// dataset had removed and across how many participants. Click it to jump the day
+// filter straight to this participant's removed days.
+function renderRemovedSummary(){
+ const el = $('removedSummary');
+ if(!el) return;
+ const n = S.nExcluded || 0;
+ const people = Object.keys(S.byPerson).filter(p=>personExcluded(p)).length;
+ if(!n){ el.style.display='none'; return; }
+ el.style.display = '';
+ el.innerHTML = `⊘ <b>${n}</b> day${n===1?'':'s'} removed`
+   + `<span class="rs-sub">across ${people} participant${people===1?'':'s'}</span>`;
+ el.onclick = ()=>{ S.dayFilter='removed'; fillDays(); };
+}
 
 // Keep one person's option text (label + done-checkmark) in sync after a
 // day_cleaned/day_include change.
@@ -181,6 +201,7 @@ export function refreshDays(){
   }));
   refreshPersonOption(S.cur.person);
   renderProgress();   // day/person counts move as days get checked off
+  renderRemovedSummary();   // the removed-day total moves on a recover/delete
   fillDays();
  });
 }
@@ -227,6 +248,13 @@ export function rewind(path){fetch(`/api/${SID}/${path}`, {method:'POST'}).then(
 export function undoEdit(seq){
  fetch(`/api/${SID}/undo_event`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({seq})}).then(()=>loadDay(false,true));
+}
+
+// Delete every no-purpose trip on the day in one request (each individually
+// undoable). Resolves to the count removed so the caller can report it.
+export function removeNoPurpose(dayKey){
+ return fetch(`/api/${SID}/remove_no_purpose`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({day_key:dayKey})}).then(r=>r.json()).then(d=>{ loadDay(false,true); return d.removed; });
 }
 
 export function manualDelete(rawRow, dayKey){

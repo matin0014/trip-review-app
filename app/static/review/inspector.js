@@ -5,7 +5,7 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
+import {decide, manualDelete, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -96,7 +96,20 @@ function detailHTML(t){
   `</div>`+
   (activeEnd ? `<div class="reposition-hint">Click the map to set the new ${activeEnd} location.</div>` : '')+
   commentHTML(t)+
+  `<div class="drow trip-delete-act"><button class="act trip-delete-btn">Delete trip</button></div>`+
  `</div>`;
+}
+
+// A split trip shows as two separately-clickable rows, so selecting/deselecting
+// one for a merge also selects/deselects its other half -- otherwise a reviewer
+// merging trip A with split trip B can easily grab only one of B's two pieces,
+// silently stranding the other outside the merge (a real bug: the engine merges
+// correctly when given both halves, but nothing told the reviewer there WERE
+// two halves to select).
+export function toggleMergeSelect(t){
+ const on = !S.mergeSelected.has(t.id);
+ const ids = [t.id, t.splitSibling].filter(x=>x!=null);
+ ids.forEach(id => on ? S.mergeSelected.add(id) : S.mergeSelected.delete(id));
 }
 
 function _mergeSelValid() {
@@ -123,11 +136,22 @@ function _updateMergeBar() {
  btn.disabled = !valid;
 }
 
+// A trip counts as "no purpose" when its purpose is blank -- the app's reading of
+// the data's `None` (see the wave-3 loader note). This is live: give it a purpose
+// and it drops out of the set on the next render.
+const noPurpose = t => !(t.purpose || '').trim();
+
 export function renderTrips(){
  const d = S.cur.data; tripsEl.innerHTML='';
  $('tcount').textContent = d.trips.length;
- $('nShown').textContent = (d.trips.length-S.hidden.size)+' / '+d.trips.length+' shown';
- d.trips.forEach(t=>{
+ const nNo = d.trips.filter(noPurpose).length;
+ $('noPurposeCount').textContent = nNo ? `(${nNo})` : '';
+ $('bRemoveNoPurpose').disabled = nNo === 0;
+ // toggling no-purpose OFF removes those trips from BOTH the list and the map
+ const listed = d.trips.filter(t => S.showNoPurpose || !noPurpose(t));
+ const onMap = listed.filter(t => !S.hidden.has(t.seq)).length;
+ $('nShown').textContent = onMap+' / '+d.trips.length+' shown';
+ listed.forEach(t=>{
   const card = document.createElement('div');
   const mergeSel = S.mergeMode && S.mergeSelected.has(t.id);
   card.className = 'row'+(S.sel.has(t.seq)&&!S.mergeMode?' sel':'')
@@ -138,15 +162,14 @@ export function renderTrips(){
    `<span class="node" style="background:${tcol(t.seq)}">${t.seq}</span>`+
    `<div class="row__main"><div class="row__time"><span class="mono">${t.start}–${t.end}</span>${logged}`+
    `<span class="mono" style="color:var(--slate-500)">${t.dur}m</span></div>`+
-   `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}</div></div>`+
+   `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}`+
+   (S.mergeMode&&t.splitSibling!=null?' · <span class="split-tag">split, selects both halves</span>':'')+
+   `</div></div>`+
    (S.mergeMode ? '' : `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span>`)+
    `</div>`+
    (S.sel.has(t.seq)&&!S.mergeMode?detailHTML(t):'');
   if(S.mergeMode){
-   card.onclick = ()=>{
-    S.mergeSelected.has(t.id)?S.mergeSelected.delete(t.id):S.mergeSelected.add(t.id);
-    S.render(false);
-   };
+   card.onclick = ()=>{ toggleMergeSelect(t); S.render(false); };
   } else {
    // One delegated handler: which part of the card was clicked decides the action.
    card.onclick = (e)=>{
@@ -189,6 +212,11 @@ export function renderTrips(){
     if(e.target.closest('.cm-cancel')){ S.commentOpen=null; S.render(); return; }
     if(e.target.closest('.comment-toggle')){ S.commentOpen = S.commentOpen===t.seq?null:t.seq; S.render(); return; }
     if(e.target.closest('.comment-edit')) return;  // clicks inside the textarea don't collapse
+    if(e.target.closest('.trip-delete-btn')){
+     if(confirm(`Delete trip #${t.seq} (${t.mode}, ${t.start}–${t.end})? It is dropped from the export (undoable).`))
+      manualDelete(t.id, S.cur.key);
+     return;
+    }
     // Expanding a trip does NOT collapse the others -- several details can be
     // open at once; only the per-trip editors are exclusive.
     if(S.sel.has(t.seq)){ S.sel.delete(t.seq); S.selId.delete(t.id); }
@@ -249,8 +277,16 @@ export function flagCard(f){
 
 export function renderFlags(){
  const d = S.cur.data;
- const pend = d.flags.filter(f=>f.status==='pending');
- const res = d.flags.filter(f=>f.status!=='pending');
+ // With "Show no-purpose" off, also drop any flag that TOUCHES a no-purpose
+ // trip -- including a fragment/mode_change between a no-purpose trip and a
+ // real one, since that no-purpose trip is hidden from the list and map, so a
+ // flag pointing at it would be an orphaned reference to something not shown.
+ const bySeq = {}; d.trips.forEach(t=>bySeq[t.seq]=t);
+ const visibleFlag = f => S.showNoPurpose
+   || f.seqs.every(s => { const t = bySeq[s]; return t && (t.purpose||'').trim(); });
+ const flags = d.flags.filter(visibleFlag);
+ const pend = flags.filter(f=>f.status==='pending');
+ const res = flags.filter(f=>f.status!=='pending');
  $('fcount').textContent = pend.length;
  flagsEl.innerHTML = '';
  if(!pend.length) flagsEl.innerHTML = '<div class="empty">No pending flags.</div>';

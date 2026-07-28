@@ -17,7 +17,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_file, ur
 
 from app import baseline, charts, decisions, generate, regions, routing, session, state
 from engine.classify import classify_all
-from engine.proposals import _route_from_coords
+from engine.proposals import _route_from_coords, split_b_row
 from engine.loader import load_socio, load_trips
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous cap for a raw wave workbook
@@ -401,6 +401,16 @@ def create_app() -> Flask:
 
         seq_of = {t.raw_row: i for i, t in enumerate(live_trips, start=1)}
 
+        # A trip whose split_b_row is ALSO live right now is one half of a still-
+        # active manual split (once merged, one side is absorbed and this is empty
+        # for that raw_row -- exactly when the pairing no longer matters).
+        live_rows = set(seq_of)
+        sibling_of = {}
+        for row in live_rows:
+            if row >= 0 and split_b_row(row) in live_rows:
+                sibling_of[row] = split_b_row(row)
+                sibling_of[split_b_row(row)] = row
+
         def status(flag_id):
             r = res.get(flag_id)
             if r in decisions.APPLY_RESOLUTIONS:
@@ -411,7 +421,8 @@ def create_app() -> Flask:
         comments = {str(rr): txt for (dk, rr), txt
                     in decisions.trip_comments(all_events).items() if dk == key}
         return jsonify({
-            "trips": [baseline.serialize_trip(t, i) for i, t in enumerate(live_trips, start=1)],
+            "trips": [baseline.serialize_trip(t, i, sibling_of.get(t.raw_row))
+                     for i, t in enumerate(live_trips, start=1)],
             "flags": [baseline.serialize_flag(f, seq_of, status(f.flag_id)) for f in surfaced],
             "edits": _edits_for_day(all_events, key),
             "comments": comments,
@@ -447,6 +458,33 @@ def create_app() -> Flask:
         session.append_event(sid, {"type": "manual_delete", "raw_row": int(raw_row),
                                    "day_key": day_key})
         return _state(sid)
+
+    @app.post("/api/<sid>/remove_no_purpose")
+    def api_remove_no_purpose(sid):
+        """Delete every LIVE trip on the day whose purpose is blank ("no purpose"),
+        in one shot -- one `manual_delete` per row, so each is individually
+        undoable like a hand delete. Returns the count removed."""
+        if not session.exists(sid):
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        day_key = body.get("day_key")
+        if not day_key:
+            abort(400, "require day_key")
+        trips = state.day_trips(sid, day_key)
+        if not trips:
+            return jsonify({"removed": 0})
+        events = session.read_events(sid)
+        accepted = {fid for fid, r in decisions.resolutions(events).items()
+                    if r in decisions.APPLY_RESOLUTIONS}
+        ops = [op for op in decisions.manual_ops(events) if op.get("day_key") == day_key]
+        live_trips, _ = decisions.fixpoint(trips, accepted, ops=ops)
+        removed = 0
+        for t in live_trips:
+            if not (t.purpose or "").strip():
+                session.append_event(sid, {"type": "manual_delete",
+                                           "raw_row": int(t.raw_row), "day_key": day_key})
+                removed += 1
+        return jsonify({"removed": removed})
 
     @app.post("/api/<sid>/manual_mode")
     def api_manual_mode(sid):

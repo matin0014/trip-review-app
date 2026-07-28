@@ -178,22 +178,34 @@ def _concat(*chunks) -> list:
     return out
 
 
+# Which offline route network (if any) a manual-add mode should try to snap to
+# before falling back to a plain OSRM street route. Metro Vancouver's bus network
+# is deliberately absent (see app.rail's module docstring): 238 overlapping routes
+# with no route number in the survey data makes nearest-line snapping a silent
+# guess. "Transit Bus" still gets Kelowna's small, low-overlap network -- a
+# Vancouver-area "Transit Bus" trip is simply too far from those lines (see
+# _RAIL_MAX_ACCESS_M below) and falls back to plain OSRM automatically.
+_NETWORK_OF_MODE = {"SkyTrain": "skytrain", "SeaBus": "seabus", "Transit Bus": "kelowna_bus"}
+
+
 def route_between(mode: str, start_lat: float, start_lon: float,
                   end_lat: float, end_lon: float) -> list:
     """Best ``[[lat, lon], ...]`` geometry between two clicked points for a manual
     add. Empty on failure, so the caller draws a straight line.
 
-    A SkyTrain trip is modelled as walk-to-station -> ride -> walk-to-destination:
-    OSRM routes the access leg (clicked start -> nearest point on the best line)
-    and the egress leg (alighting point -> clicked end), with the real track
-    (`app.rail`, offline) in between. This is because the OSRM public server has no
-    rail profile, so the ride itself would otherwise follow roads (and cross
-    water/bridges the train does not). If the nearest line is unreasonably far, the
-    trip isn't really on the network and falls back to a plain OSRM route.
+    A SkyTrain/SeaBus/Kelowna-bus trip is modelled as walk-to-stop -> ride ->
+    walk-to-destination: OSRM routes the access leg (clicked start -> nearest
+    point on the best line) and the egress leg (alighting point -> clicked end),
+    with the real route (`app.rail`, offline) in between. This is because the
+    OSRM public server has no rail/bus profile, so the ride itself would
+    otherwise follow roads (and cross water/bridges the SeaBus does not). If the
+    nearest line is unreasonably far, the trip isn't really on that network and
+    falls back to a plain OSRM route.
 
     Every other mode is just the OSRM street path between the two points."""
-    if mode == "SkyTrain":
-        seg = rail.nearest_rail_segment(start_lat, start_lon, end_lat, end_lon)
+    network = _NETWORK_OF_MODE.get(mode)
+    if network is not None:
+        seg = rail.nearest_rail_segment(start_lat, start_lon, end_lat, end_lon, network)
         if seg is not None and max(seg["access_m"], seg["egress_m"]) < _RAIL_MAX_ACCESS_M:
             b_lat, b_lon = seg["board"]
             a_lat, a_lon = seg["alight"]

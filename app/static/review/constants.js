@@ -43,7 +43,7 @@ export const REGION_BOXES = [
 // vocabulary exactly: "Transit Bus" (never "Bus"), and no "Ferry" (the wave2
 // dataset has none; the water mode it does have is "SeaBus").
 export const MODES = ["Walk","Run","Bike","Auto Driver","Auto Passenger","Taxi",
-  "Transit Bus","SkyTrain","Other","Unknown"];
+  "Transit Bus","SkyTrain","SeaBus","Other","Unknown"];
 
 // Canonical wave2 trip purposes for the purpose dropdown / add form. As with
 // modes the engine never reads the label, so any value is accepted; an unknown

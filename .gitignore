@@ -12,10 +12,13 @@ venv/
 sessions/
 
 # Raw participant data (privacy-sensitive; never commit)
-# (data/* not data/, so the one public asset below can be re-included)
+# (data/* not data/, so the public assets below can be re-included)
 data/*
-# ...except the public SkyTrain track geometry the app bundles (TransLink GTFS)
+# ...except the public transit route geometry the app bundles (TransLink /
+# BC Transit GTFS): SkyTrain + SeaBus (Metro Vancouver), buses (Kelowna)
 !data/skytrain.geojson
+!data/seabus.geojson
+!data/kelowna_bus.geojson
 
 # Build artifacts
 build/
