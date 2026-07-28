@@ -128,6 +128,7 @@ export function drawMap(fit){
  const pts = [];
  d.trips.forEach(t=>{
   if(S.hidden.has(t.seq)) return;
+  if(!S.showNoPurpose && !(t.purpose||'').trim()) return;   // no-purpose toggle off
   const mergeSel = S.mergeMode && S.mergeSelected.has(t.id);
   const col = lyStraight.checked ? STRAIGHT_COL
              : mergeSel ? '#f0c040'

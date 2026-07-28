@@ -64,6 +64,11 @@
     <button id="bMerge" class="act" title="Enter merge-selection mode">Merge mode</button>
     <button id="bAdd" class="act" title="Place a new trip on the map">Add trip</button>
    </div>
+   <div class="tools" id="noPurposeTools">
+    <label class="np-toggle"><input type="checkbox" id="showNoPurpose" checked>
+     Show no-purpose <span class="aux" id="noPurposeCount"></span></label>
+    <button id="bRemoveNoPurpose" class="dangerbtn" title="Delete every no-purpose trip on this day">Remove all</button>
+   </div>
    <div id="mergeBar" class="merge-bar" style="display:none">
     <span id="mergeHint">Click trips to select</span>
     <button id="bMergeCommit" class="act apply" disabled>Merge 0</button>

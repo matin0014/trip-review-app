@@ -4,7 +4,7 @@
 import {S, map} from './state.js';
 import {drawMap, regionBounds} from './mapview.js';
 import {renderTrips, renderFlags, renderEdits, renderLegend, setRange, showNone} from './inspector.js';
-import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd, manualReposition, setDayCleaned} from './api.js';
+import {loadDays, fillDays, loadDay, rewind, manualMerge, manualAdd, manualReposition, setDayCleaned, removeNoPurpose} from './api.js';
 import {modeOptions, purposeOptions} from './constants.js';
 import {personSel, daySel, lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyFollow, lyRegions, rFrom, rTo} from './dom.js';
 
@@ -157,6 +157,13 @@ $('bResolvedToggle').onclick = ()=>{S.resolvedOpen=!S.resolvedOpen; renderFlags(
 $('bEditedToggle').onclick = ()=>{S.editsOpen=!S.editsOpen; renderEdits();};
 $('bNone').onclick = ()=>showNone();
 $('bAll').onclick = ()=>setRange(1, S.cur.data.trips.length);
+// No-purpose controls: toggle their visibility, and bulk-delete them.
+$('showNoPurpose').onchange = ()=>{ S.showNoPurpose = $('showNoPurpose').checked; S.render(false); };
+$('bRemoveNoPurpose').onclick = ()=>{
+ const n = (S.cur.data.trips||[]).filter(t=>!(t.purpose||'').trim()).length;
+ if(n && confirm(`Delete all ${n} no-purpose trip${n>1?'s':''} on this day? Each is undoable.`))
+  removeNoPurpose(S.cur.key);
+};
 rFrom.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 rTo.onchange = ()=>setRange(parseInt(rFrom.value), parseInt(rTo.value));
 $('bGenerate').onclick = async ()=>{

@@ -229,6 +229,13 @@ export function undoEdit(seq){
    body:JSON.stringify({seq})}).then(()=>loadDay(false,true));
 }
 
+// Delete every no-purpose trip on the day in one request (each individually
+// undoable). Resolves to the count removed so the caller can report it.
+export function removeNoPurpose(dayKey){
+ return fetch(`/api/${SID}/remove_no_purpose`, {method:'POST', headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({day_key:dayKey})}).then(r=>r.json()).then(d=>{ loadDay(false,true); return d.removed; });
+}
+
 export function manualDelete(rawRow, dayKey){
  fetch(`/api/${SID}/manual_delete`, {method:'POST', headers:{'Content-Type':'application/json'},
    body:JSON.stringify({raw_row:rawRow, day_key:dayKey})}).then(()=>loadDay(false,true));

@@ -5,7 +5,7 @@ import {S} from './state.js';
 import {FC, FNAME, FDESC, FLONG, APPLY_VERB, APPLY_DONE, APPLY_RES, APPLY_HELP, WAIVE_HELP,
         tcol, flagSummary, flagRows, fmtDist, PURPOSES} from './constants.js';
 import {tripsEl, flagsEl, legendEl, rFrom, rTo} from './dom.js';
-import {decide, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
+import {decide, manualDelete, manualMode, manualPurpose, manualTime, setComment, undoEdit} from './api.js';
 
 const $ = id => document.getElementById(id);
 
@@ -96,6 +96,7 @@ function detailHTML(t){
   `</div>`+
   (activeEnd ? `<div class="reposition-hint">Click the map to set the new ${activeEnd} location.</div>` : '')+
   commentHTML(t)+
+  `<div class="drow trip-delete-act"><button class="act trip-delete-btn">Delete trip</button></div>`+
  `</div>`;
 }
 
@@ -123,11 +124,22 @@ function _updateMergeBar() {
  btn.disabled = !valid;
 }
 
+// A trip counts as "no purpose" when its purpose is blank -- the app's reading of
+// the data's `None` (see the wave-3 loader note). This is live: give it a purpose
+// and it drops out of the set on the next render.
+const noPurpose = t => !(t.purpose || '').trim();
+
 export function renderTrips(){
  const d = S.cur.data; tripsEl.innerHTML='';
  $('tcount').textContent = d.trips.length;
- $('nShown').textContent = (d.trips.length-S.hidden.size)+' / '+d.trips.length+' shown';
- d.trips.forEach(t=>{
+ const nNo = d.trips.filter(noPurpose).length;
+ $('noPurposeCount').textContent = nNo ? `(${nNo})` : '';
+ $('bRemoveNoPurpose').disabled = nNo === 0;
+ // toggling no-purpose OFF removes those trips from BOTH the list and the map
+ const listed = d.trips.filter(t => S.showNoPurpose || !noPurpose(t));
+ const onMap = listed.filter(t => !S.hidden.has(t.seq)).length;
+ $('nShown').textContent = onMap+' / '+d.trips.length+' shown';
+ listed.forEach(t=>{
   const card = document.createElement('div');
   const mergeSel = S.mergeMode && S.mergeSelected.has(t.id);
   card.className = 'row'+(S.sel.has(t.seq)&&!S.mergeMode?' sel':'')
@@ -189,6 +201,11 @@ export function renderTrips(){
     if(e.target.closest('.cm-cancel')){ S.commentOpen=null; S.render(); return; }
     if(e.target.closest('.comment-toggle')){ S.commentOpen = S.commentOpen===t.seq?null:t.seq; S.render(); return; }
     if(e.target.closest('.comment-edit')) return;  // clicks inside the textarea don't collapse
+    if(e.target.closest('.trip-delete-btn')){
+     if(confirm(`Delete trip #${t.seq} (${t.mode}, ${t.start}–${t.end})? It is dropped from the export (undoable).`))
+      manualDelete(t.id, S.cur.key);
+     return;
+    }
     // Expanding a trip does NOT collapse the others -- several details can be
     // open at once; only the per-trip editors are exclusive.
     if(S.sel.has(t.seq)){ S.sel.delete(t.seq); S.selId.delete(t.id); }
