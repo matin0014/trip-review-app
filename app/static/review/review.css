@@ -108,6 +108,11 @@ select:focus{outline:none;border-color:var(--cobalt-500);box-shadow:0 0 0 3px va
 .tools .sp{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--slate-500)}
 .tools .rng{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-600)}
 .tools .rng input{width:40px;padding:3px 4px;border:1px solid var(--paper-300);border-radius:6px;font-family:var(--mono);font-size:12px;text-align:center}
+.removed-summary{margin:6px 0 2px;padding:6px 9px;border-radius:7px;font-size:12px;cursor:pointer;
+  color:#b42318;background:rgba(220,60,60,.08);border:1px solid rgba(220,60,60,.25)}
+.removed-summary:hover{background:rgba(220,60,60,.14)}
+.removed-summary b{font-family:var(--mono)}
+.removed-summary .rs-sub{display:block;color:var(--slate-500);font-size:11px;margin-top:1px}
 .np-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-700);cursor:pointer}
 .np-toggle input{accent-color:var(--cobalt-500)}
 #noPurposeTools .dangerbtn{margin-left:auto}
