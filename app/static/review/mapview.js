@@ -201,9 +201,10 @@ export function drawMap(fit){
   const bnds = map.getBounds();
   d.flags.forEach(f=>{
    if(f.status!=='pending') return;
-   // no-purpose toggle off: skip flags raised purely by no-purpose trips (matches
-   // the flags panel), so hidden trips don't leave stray flag markers behind
-   if(!S.showNoPurpose && !f.seqs.some(s=>{const t=byseq[s]; return t && (t.purpose||'').trim();})) return;
+   // no-purpose toggle off: skip any flag touching a no-purpose trip (matches the
+   // flags panel), so a fragment between a no-purpose trip and a real one doesn't
+   // leave a marker pointing at a trip that's hidden from the map
+   if(!S.showNoPurpose && !f.seqs.every(s=>{const t=byseq[s]; return t && (t.purpose||'').trim();})) return;
    const col = FC[f.type]||'#000', sq = f.seqs.filter(x=>x!=null); let mid;
    if(f.type==='zero_move'){
     const t = byseq[sq[0]]; if(!t || S.hidden.has(t.seq) || !bnds.contains(t.s)) return;

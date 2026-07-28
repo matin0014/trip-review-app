@@ -277,12 +277,13 @@ export function flagCard(f){
 
 export function renderFlags(){
  const d = S.cur.data;
- // With "Show no-purpose" off, also drop the flags raised purely BY no-purpose
- // trips -- a flag every one of whose trips is no-purpose is clutter you've
- // chosen to hide. A flag touching at least one purposed trip still shows.
+ // With "Show no-purpose" off, also drop any flag that TOUCHES a no-purpose
+ // trip -- including a fragment/mode_change between a no-purpose trip and a
+ // real one, since that no-purpose trip is hidden from the list and map, so a
+ // flag pointing at it would be an orphaned reference to something not shown.
  const bySeq = {}; d.trips.forEach(t=>bySeq[t.seq]=t);
  const visibleFlag = f => S.showNoPurpose
-   || f.seqs.some(s => { const t = bySeq[s]; return t && (t.purpose||'').trim(); });
+   || f.seqs.every(s => { const t = bySeq[s]; return t && (t.purpose||'').trim(); });
  const flags = d.flags.filter(visibleFlag);
  const pend = flags.filter(f=>f.status==='pending');
  const res = flags.filter(f=>f.status!=='pending');
