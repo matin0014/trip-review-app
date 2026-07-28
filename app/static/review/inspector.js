@@ -100,6 +100,18 @@ function detailHTML(t){
  `</div>`;
 }
 
+// A split trip shows as two separately-clickable rows, so selecting/deselecting
+// one for a merge also selects/deselects its other half -- otherwise a reviewer
+// merging trip A with split trip B can easily grab only one of B's two pieces,
+// silently stranding the other outside the merge (a real bug: the engine merges
+// correctly when given both halves, but nothing told the reviewer there WERE
+// two halves to select).
+export function toggleMergeSelect(t){
+ const on = !S.mergeSelected.has(t.id);
+ const ids = [t.id, t.splitSibling].filter(x=>x!=null);
+ ids.forEach(id => on ? S.mergeSelected.add(id) : S.mergeSelected.delete(id));
+}
+
 function _mergeSelValid() {
  if(S.mergeSelected.size < 2) return false;
  const seqs = S.cur.data.trips
@@ -150,15 +162,14 @@ export function renderTrips(){
    `<span class="node" style="background:${tcol(t.seq)}">${t.seq}</span>`+
    `<div class="row__main"><div class="row__time"><span class="mono">${t.start}–${t.end}</span>${logged}`+
    `<span class="mono" style="color:var(--slate-500)">${t.dur}m</span></div>`+
-   `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}</div></div>`+
+   `<div class="row__sub">${t.mode}${t.purpose?' · '+t.purpose:''}`+
+   (S.mergeMode&&t.splitSibling!=null?' · <span class="split-tag">split, selects both halves</span>':'')+
+   `</div></div>`+
    (S.mergeMode ? '' : `<span class="vis${S.hidden.has(t.seq)?'':' on'}" title="Show/hide on map"></span>`)+
    `</div>`+
    (S.sel.has(t.seq)&&!S.mergeMode?detailHTML(t):'');
   if(S.mergeMode){
-   card.onclick = ()=>{
-    S.mergeSelected.has(t.id)?S.mergeSelected.delete(t.id):S.mergeSelected.add(t.id);
-    S.render(false);
-   };
+   card.onclick = ()=>{ toggleMergeSelect(t); S.render(false); };
   } else {
    // One delegated handler: which part of the card was clicked decides the action.
    card.onclick = (e)=>{
@@ -266,8 +277,15 @@ export function flagCard(f){
 
 export function renderFlags(){
  const d = S.cur.data;
- const pend = d.flags.filter(f=>f.status==='pending');
- const res = d.flags.filter(f=>f.status!=='pending');
+ // With "Show no-purpose" off, also drop the flags raised purely BY no-purpose
+ // trips -- a flag every one of whose trips is no-purpose is clutter you've
+ // chosen to hide. A flag touching at least one purposed trip still shows.
+ const bySeq = {}; d.trips.forEach(t=>bySeq[t.seq]=t);
+ const visibleFlag = f => S.showNoPurpose
+   || f.seqs.some(s => { const t = bySeq[s]; return t && (t.purpose||'').trim(); });
+ const flags = d.flags.filter(visibleFlag);
+ const pend = flags.filter(f=>f.status==='pending');
+ const res = flags.filter(f=>f.status!=='pending');
  $('fcount').textContent = pend.length;
  flagsEl.innerHTML = '';
  if(!pend.length) flagsEl.innerHTML = '<div class="empty">No pending flags.</div>';

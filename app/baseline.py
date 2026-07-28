@@ -35,7 +35,7 @@ def _evidence(ev: object) -> dict:
     return out
 
 
-def serialize_trip(t, seq: int) -> dict:
+def serialize_trip(t, seq: int, split_sibling: int = None) -> dict:
     """One trip -> JSON (rounded route; falls back to start/end if no breadcrumbs).
 
     Shared by the baseline and the live recompute so the two never drift.
@@ -43,7 +43,12 @@ def serialize_trip(t, seq: int) -> dict:
     `dist_m` is the distance actually travelled (summed over GPS breadcrumbs);
     `disp_m` is the straight-line start->end displacement; `r0_t`/`rN_t` are the
     timestamps of the first and last GPS breadcrumb (None when the trip carries no
-    route), so the reviewer can see the actual GPS coverage window."""
+    route), so the reviewer can see the actual GPS coverage window. `split_sibling`
+    is the OTHER half's raw_row when this trip is one half of an active manual
+    split, else None -- a split trip shows as two separately-selectable rows, so
+    Merge mode uses this to select/deselect both halves together (otherwise a
+    reviewer merging trip A with a split trip B can easily grab only one of B's two
+    pieces, leaving the other stranded outside the merge)."""
     pts = t.route
     route = [[_r(p.lat), _r(p.lon)] for p in pts] or \
             [[_r(t.start_lat), _r(t.start_lon)], [_r(t.end_lat), _r(t.end_lon)]]
@@ -63,6 +68,7 @@ def serialize_trip(t, seq: int) -> dict:
         "rN_t": pts[-1].ts.strftime("%H:%M:%S") if pts else None,
         "npts": len(pts),
         "route": route,
+        "splitSibling": split_sibling,
     }
 
 

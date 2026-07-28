@@ -11,6 +11,7 @@ import {FC, FNAME, STRAIGHT_COL, tcol, APPLY_VERB, APPLY_DONE, APPLY_RES,
         modeOptions, hmToMin, minToHm, REGION_BOXES} from './constants.js';
 import {lyTrips, lyStraight, lyFlags, lyEnds, lyHome, lyRegions} from './dom.js';
 import {decide, manualDelete, manualSplit} from './api.js';
+import {toggleMergeSelect} from './inspector.js';
 
 // Singleton Leaflet popup (no default close button; we provide our own).
 const _popup = L.popup({closeButton: false, autoPan: true, className: 'map-popup'});
@@ -159,7 +160,7 @@ export function drawMap(fit){
     if(S.addMode) return;   // let the map-level handler capture the add point
     L.DomEvent.stopPropagation(e);
     if(S.mergeMode){
-     S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
+     toggleMergeSelect(t);
      S.render(false);
     } else {
      showTripPopup(t, e.latlng);
@@ -175,7 +176,7 @@ export function drawMap(fit){
       if(S.addMode) return;
       L.DomEvent.stopPropagation(e);
       if(S.mergeMode){
-       S.mergeSelected.has(t.id) ? S.mergeSelected.delete(t.id) : S.mergeSelected.add(t.id);
+       toggleMergeSelect(t);
        S.render(false);
       } else {
        // clicking a trip on the map expands it alongside any already open
@@ -200,6 +201,9 @@ export function drawMap(fit){
   const bnds = map.getBounds();
   d.flags.forEach(f=>{
    if(f.status!=='pending') return;
+   // no-purpose toggle off: skip flags raised purely by no-purpose trips (matches
+   // the flags panel), so hidden trips don't leave stray flag markers behind
+   if(!S.showNoPurpose && !f.seqs.some(s=>{const t=byseq[s]; return t && (t.purpose||'').trim();})) return;
    const col = FC[f.type]||'#000', sq = f.seqs.filter(x=>x!=null); let mid;
    if(f.type==='zero_move'){
     const t = byseq[sq[0]]; if(!t || S.hidden.has(t.seq) || !bnds.contains(t.s)) return;

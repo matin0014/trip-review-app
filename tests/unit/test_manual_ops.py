@@ -238,7 +238,9 @@ def test_split_divides_route_by_timestamp():
     assert a.end_lon == 4.0 and b.start_lon == 5.0
 
 
-def test_split_b_inherits_purpose_a_blank():
+def test_split_keeps_the_origin_purpose_on_both_halves():
+    # both legs inherit the purpose, so a split never manufactures a "no purpose"
+    # A-piece that the no-purpose tools would then sweep up
     trips = [routed(5, 0, 10)]
     trips[0].purpose = "Work"
     op = {"type": "manual_split", "raw_row": 5,
@@ -246,7 +248,7 @@ def test_split_b_inherits_purpose_a_blank():
     out = apply_manual_ops(trips, [op])
     a = [t for t in out if t.raw_row == 5][0]
     b = [t for t in out if t.raw_row == split_b_row(5)][0]
-    assert a.purpose == "" and b.purpose == "Work"
+    assert a.purpose == "Work" and b.purpose == "Work"
 
 
 def test_split_out_of_range_is_noop():
