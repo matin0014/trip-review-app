@@ -93,6 +93,10 @@ if ($damaged.Count -eq 0 -and $missing.Count -eq 0) {
     Write-Host "  READY." -ForegroundColor Green
     Write-Host "  All $($lines.Count) files verified. Double-click TripReview.exe to start."
     Write-Host ""
+    Write-Host "  Setup is done, so this window's files (Setup.bat, Setup.ps1 and"
+    Write-Host "  SHA256SUMS.txt) are removed when you close it -- the app itself"
+    Write-Host "  does not need them. Everything else stays."
+    Write-Host ""
     Read-Host "  Press Enter to close"
     exit 0
 }
