@@ -3,19 +3,71 @@ in a native desktop window (pywebview), not a system browser tab.
 
 Binds 127.0.0.1 only (data stays on the reviewer's machine) and picks a free
 port so multiple copies don't collide. This is what the PyInstaller exe will run.
+
+Startup is wrapped in `_fatal` so a broken install reports itself. The exe is a
+console app, so an unhandled exception here used to flash a window and vanish
+before anyone could read it: reviewers just saw "it doesn't launch". The most
+likely cause is a DAMAGED COPY (this build is ~200 MB across ~1000 files, and a
+copy over the shared drive that drops mid-transfer leaves silently zero-filled
+files), which surfaces as a misleading ImportError from numpy claiming you are
+"importing numpy from its source directory". Catching it here turns that into a
+readable instruction, and holds the console open so it can actually be read.
 """
 
 from __future__ import annotations
 
 import shutil
 import socket
+import sys
 import threading
 import time
+import traceback
 
-import webview
 
-from app import generate
-from app.server import create_app
+def _fatal(exc: BaseException) -> None:
+    """Report a startup failure in plain English, then hold the window open.
+
+    Deliberately uses ONLY the standard library: the whole point is to still
+    work when the bundled third-party libraries are the thing that's broken."""
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    damaged = isinstance(exc, ImportError) or "DLL" in str(exc)
+    print()
+    print("=" * 70)
+    print("  Trip Review Tool could not start.")
+    print("=" * 70)
+    if damaged:
+        print()
+        print("  This copy of the app looks DAMAGED (an incomplete file copy),")
+        print("  not broken software. The error above is misleading: it comes")
+        print("  from a bundled library that failed to load, not from numpy.")
+        print()
+        print("  To fix it:")
+        print("    1. Delete this folder.")
+        print("    2. Copy TripReview.zip again from the shared drive.")
+        print("    3. Right-click the zip -> Extract All.")
+        print("    4. Run Setup.ps1, which unblocks and verifies the files.")
+        print()
+        print("  Setup.ps1 checks every file, so it will tell you plainly if a")
+        print("  copy arrived damaged instead of failing like this later.")
+    else:
+        print()
+        print("  Send the error text above to Matin: it is not a copy problem,")
+        print("  so re-copying the app will not help.")
+    print()
+    try:
+        input("  Press Enter to close this window... ")
+    except (EOFError, KeyboardInterrupt, OSError):
+        pass  # no console attached; the traceback above still went to stderr
+    sys.exit(1)
+
+
+try:
+    import webview
+
+    from app import generate
+    from app.server import create_app
+except Exception as _exc:  # a damaged copy fails HERE, at import time
+    _fatal(_exc)
 
 
 def _free_port() -> int:
@@ -88,4 +140,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:   # same treatment for a failure after import
+        _fatal(exc)
