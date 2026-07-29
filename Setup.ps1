@@ -12,7 +12,12 @@
 # Usage: right-click this file -> "Run with PowerShell", or from a terminal:
 #            powershell -ExecutionPolicy Bypass -File .\Setup.ps1
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+# $PSScriptRoot is empty when this script is PASTED into a console rather than
+# run as a file, which is exactly what someone does when double-clicking opens
+# it in Notepad instead. Falling back to the working directory keeps the pasted
+# path working; the SHA256SUMS.txt check below then reports clearly if that
+# guess was wrong, rather than silently unblocking nothing.
+$root = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 
 Write-Host ""
 Write-Host "  Trip Review Tool -- setup" -ForegroundColor Cyan
@@ -36,9 +41,19 @@ Write-Host "  [2/2] Verifying files (this takes a moment)..."
 $sumsPath = Join-Path $root "SHA256SUMS.txt"
 if (-not (Test-Path -LiteralPath $sumsPath)) {
     Write-Host ""
-    Write-Host "  PROBLEM: SHA256SUMS.txt is missing." -ForegroundColor Red
-    Write-Host "  This folder is incomplete. Copy TripReview.zip again from the"
-    Write-Host "  shared drive and extract it fresh."
+    Write-Host "  PROBLEM: SHA256SUMS.txt was not found in:" -ForegroundColor Red
+    Write-Host "    $root"
+    Write-Host ""
+    if (-not $PSScriptRoot) {
+        # pasted into a console: the folder above is just the current directory,
+        # so the likeliest cause is being in the wrong one, not a bad download
+        Write-Host "  It looks like this script was pasted into a PowerShell window."
+        Write-Host "  Change to the app folder first, then paste it again:"
+        Write-Host "    cd `"<the folder containing TripReview.exe>`"" -ForegroundColor Cyan
+    } else {
+        Write-Host "  This folder is incomplete. Copy TripReview.zip again from"
+        Write-Host "  the shared drive and extract it fresh."
+    }
     Write-Host ""
     Read-Host "  Press Enter to close"
     exit 1

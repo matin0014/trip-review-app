@@ -6,12 +6,20 @@ port so multiple copies don't collide. This is what the PyInstaller exe will run
 
 Startup is wrapped in `_fatal` so a broken install reports itself. The exe is a
 console app, so an unhandled exception here used to flash a window and vanish
-before anyone could read it: reviewers just saw "it doesn't launch". The most
-likely cause is a DAMAGED COPY (this build is ~200 MB across ~1000 files, and a
-copy over the shared drive that drops mid-transfer leaves silently zero-filled
-files), which surfaces as a misleading ImportError from numpy claiming you are
-"importing numpy from its source directory". Catching it here turns that into a
-readable instruction, and holds the console open so it can actually be read.
+before anyone could read it: reviewers just saw "it doesn't launch".
+
+Two install problems account for nearly all of these, and BOTH surface as an
+error naming whichever bundled library happened to load first, never the actual
+cause:
+  * blocked files -- Windows marks anything extracted from a zip that came from
+    a shared drive as untrusted, and .NET then refuses to load its assemblies
+    ("Failed to resolve ... from Python.Runtime.dll");
+  * a damaged copy -- this build is ~200 MB across ~1000 files, and a copy that
+    drops mid-transfer leaves silently zero-filled files, which shows up as an
+    ImportError from numpy claiming you are "importing numpy from its source
+    directory".
+Setup.bat fixes the first and detects the second, so `_fatal` points there
+rather than trying to tell the two apart from the exception alone.
 """
 
 from __future__ import annotations
@@ -30,29 +38,27 @@ def _fatal(exc: BaseException) -> None:
     Deliberately uses ONLY the standard library: the whole point is to still
     work when the bundled third-party libraries are the thing that's broken."""
     traceback.print_exception(type(exc), exc, exc.__traceback__)
-    damaged = isinstance(exc, ImportError) or "DLL" in str(exc)
     print()
     print("=" * 70)
     print("  Trip Review Tool could not start.")
     print("=" * 70)
-    if damaged:
-        print()
-        print("  This copy of the app looks DAMAGED (an incomplete file copy),")
-        print("  not broken software. The error above is misleading: it comes")
-        print("  from a bundled library that failed to load, not from numpy.")
-        print()
-        print("  To fix it:")
-        print("    1. Delete this folder.")
-        print("    2. Copy TripReview.zip again from the shared drive.")
-        print("    3. Right-click the zip -> Extract All.")
-        print("    4. Run Setup.ps1, which unblocks and verifies the files.")
-        print()
-        print("  Setup.ps1 checks every file, so it will tell you plainly if a")
-        print("  copy arrived damaged instead of failing like this later.")
-    else:
-        print()
-        print("  Send the error text above to Matin: it is not a copy problem,")
-        print("  so re-copying the app will not help.")
+    print()
+    print("  Almost always this is the INSTALL, not the software: either")
+    print("  Windows has blocked the files (it does that to anything that came")
+    print("  from a shared drive or a zip), or the copy arrived damaged.")
+    print("  Both produce errors like the one above, which point at whichever")
+    print("  bundled library happened to load first rather than at the cause.")
+    print()
+    print("  Fix it in this order:")
+    print("    1. Double-click Setup.bat in this folder and let it finish.")
+    print("       It unblocks the files AND checks every one of them.")
+    print("    2. If it says READY, try launching again.")
+    print("    3. If it reports damaged files, delete this folder, copy")
+    print("       TripReview.zip again from the shared drive, extract it,")
+    print("       and run Setup.bat once more.")
+    print()
+    print("  If Setup.bat says READY and this still happens, send the error")
+    print("  text above to Matin: at that point it is not an install problem.")
     print()
     try:
         input("  Press Enter to close this window... ")

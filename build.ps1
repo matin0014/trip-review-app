@@ -26,8 +26,9 @@ Write-Host "Running PyInstaller..."
 $distDir = ".\dist\TripReview"
 
 Write-Host ""
-Write-Host "Adding Setup.ps1 (reviewers run it after extracting)..."
+Write-Host "Adding Setup.bat + Setup.ps1 (reviewers run these after extracting)..."
 Copy-Item ".\Setup.ps1" -Destination $distDir -Force
+Copy-Item ".\Setup.bat" -Destination $distDir -Force   # the double-clickable wrapper
 
 Write-Host "Generating SHA256SUMS.txt..."
 $sumsPath = Join-Path $distDir "SHA256SUMS.txt"
