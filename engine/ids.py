@@ -46,7 +46,13 @@ def project_trip_id(
 
     Grammar `<prefix><number>`: keep ``143`` / merge ``M143`` (group = lowest raw
     row) / add ``A07`` / remove ``R145`` (Do-file only) / review-kept ``Q145``
-    (missing_activity + mode_change) / split ``S150`` (reserved).
+    (missing_activity + mode_change) / split ``S150`` (reserved) /
+    zero-movement day ``Z145``.
+
+    ``Z`` is deliberately NOT ``R``: an ``R`` row is one the cleaned file drops,
+    whereas a ``Z`` row is present in the cleaned file on purpose. It stands for
+    a whole day on which the participant did not travel, so reusing ``R`` would
+    say "removed" about a row that is right there in the deliverable.
     """
     if kind == "keep":
         return str(raw_row)
@@ -60,4 +66,6 @@ def project_trip_id(
         return f"Q{raw_row}"
     if kind == "split":
         return f"S{raw_row}"
+    if kind == "zero_move":
+        return f"Z{raw_row}"
     raise ValueError(f"unknown projection kind: {kind!r}")

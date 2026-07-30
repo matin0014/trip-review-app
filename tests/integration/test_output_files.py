@@ -480,3 +480,134 @@ def test_undo_reverts_an_operation(tmp_path, monkeypatch):
     cleaned, dofile = _export(sid)
     assert tids(cleaned) == ["1", "2", "3"]            # row 2 is back
     assert "removed" not in set(dofile["status"])
+
+
+# --- zero-movement days ---------------------------------------------------
+
+def _stationary(start, end, lat=49.260, lon=-123.120, person=PERSON, date=DATE):
+    """A trip that never really moves, so classify_all flags it zero_move."""
+    t = trip(start, end, lat, lon, lat + 0.0001, lon, mode="Walk", person=person)
+    t["routes"] = _route(lat, lon, lat + 0.0001, lon, start, end)
+    t["start_date"] = t["end_date"] = date
+    return t
+
+
+def _accept_all_zero_moves(sid):
+    raw_path = f"{session.session_dir(sid)}/raw.xlsx"
+    for f in with_ids(classify_all(load_trips(raw_path))):
+        if f.flag_type == "zero_move":
+            session.append_event(sid, {"type": "decision", "flag_id": f.flag_id,
+                                       "resolution": "accept"})
+
+
+def test_a_day_of_only_zero_move_trips_survives_as_one_Z_row(tmp_path, monkeypatch):
+    # The whole day is GPS drift, so every row is removed. Without a placeholder
+    # the day would vanish and be indistinguishable from a day never reported.
+    sid = _make_session(tmp_path, monkeypatch,
+                        [_stationary("09:00:00", "09:20:00"),
+                         _stationary("14:00:00", "14:20:00")])
+    _accept_all_zero_moves(sid)
+    cleaned, dofile = _export(sid)
+
+    assert tids(cleaned) == ["Z1"]                    # ONE row for the whole day
+    row = cleaned.iloc[0]
+    assert row["comment"] == generate.ZERO_MOVE_NOTE
+    assert row["accessCode"] == PERSON                # who
+    assert str(row["start_date"])[:10] == DATE        # and when: both kept
+    # ...but nothing describing a journey, because none happened
+    for col in ("start_time", "end_time", "mode_of_travel", "purpose_of_travel",
+                "start_latitude", "end_latitude", "routes"):
+        assert pd.isna(row[col]), col
+    # the individual trips are still audited as removed in the ledger
+    assert set(tids(dofile)) == {"R1", "R2"}
+
+
+def test_a_participant_whose_only_day_is_zero_move_is_kept_not_removed(tmp_path, monkeypatch):
+    # A day with no travel is a finding, not a deletion: the person stays in the
+    # dataset and must not be counted among the removed participants.
+    sid = _make_session(tmp_path, monkeypatch, [_stationary("09:00:00", "09:20:00")])
+    _accept_all_zero_moves(sid)
+    cleaned, _ = _export(sid)
+    assert tids(cleaned) == ["Z1"]
+    assert cleaned.iloc[0]["accessCode"] == PERSON
+
+    summary, rows = generate.build_removed_dfs(
+        f"{session.session_dir(sid)}/raw.xlsx", session.read_events(sid), set())
+    n = dict(zip(summary["Measure"], summary["Count"]))
+    assert n["People removed entirely"] == 0
+    assert n["Days removed (total)"] == 0
+    assert rows.empty
+
+
+def test_a_hand_deleted_day_is_not_reported_as_zero_movement(tmp_path, monkeypatch):
+    # Deleting trips by hand says "these records are junk", which is NOT a claim
+    # that the participant stayed put, so no Z row is invented for that day.
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    for r in (1, 2, 3):
+        session.append_event(sid, {"type": "manual_delete", "raw_row": r, "day_key": DAY_KEY})
+    cleaned, _ = _export(sid)
+    assert not any(t.startswith("Z") for t in tids(cleaned))
+    assert len(cleaned) == 0
+
+
+def test_a_day_with_one_surviving_trip_gets_no_Z_row(tmp_path, monkeypatch):
+    # Only a day left with NOTHING becomes a zero-movement day.
+    sid = _make_session(tmp_path, monkeypatch,
+                        [_stationary("09:00:00", "09:20:00"),
+                         trip("14:00:00", "14:20:00", 49.260, -123.120, 49.278, -123.120)])
+    _accept_all_zero_moves(sid)
+    cleaned, _ = _export(sid)
+    assert tids(cleaned) == ["2"]                     # the real trip, no Z row
+
+
+# --- removed people / days accounting -------------------------------------
+
+def _on(row, date):
+    row = dict(row)
+    row["start_date"] = row["end_date"] = date
+    return row
+
+
+def test_dofile_carries_the_removed_summary_and_detail_sheets(tmp_path, monkeypatch):
+    monkeypatch.setattr(regions, "_PATH", str(tmp_path / "no-regions.json"))
+    d1, d2 = "2024-11-05", "2024-11-06"
+    rows = [_on(trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120), d1),
+            _on(trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120), d2),
+            _on(trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120,
+                     person="P2"), d1)]
+    sid = _make_session(tmp_path, monkeypatch, rows)
+    # P2 loses their only day -> removed entirely. P1 loses one of two -> partial.
+    session.append_event(sid, {"type": "day_include", "day_key": f"P2|{d1}", "include": False})
+    session.append_event(sid, {"type": "day_include", "day_key": f"{PERSON}|{d2}", "include": False})
+
+    _, dofile_path = generate.generate_cleaned_and_dofile(sid)
+    sheets = pd.read_excel(dofile_path, sheet_name=None)
+    assert "removed summary" in sheets and "removed rows" in sheets
+
+    n = dict(zip(sheets["removed summary"]["Measure"], sheets["removed summary"]["Count"]))
+    assert n["People removed entirely"] == 1          # P2
+    assert n["People who lost some days"] == 1        # P1
+    assert n["Days removed (total)"] == 2
+    assert n["  ...removed by the reviewer"] == 2
+    assert n["Trips removed with those days"] == 2
+
+    detail = sheets["removed rows"]
+    assert set(detail["person"]) == {"P2", PERSON}
+    assert set(detail["reason"]) == {"removed by reviewer"}
+    # the fully-removed participant is marked as such, so they can be told apart
+    assert detail[detail["person"] == "P2"]["person_fully_removed"].all()
+    assert not detail[detail["person"] == PERSON]["person_fully_removed"].any()
+    # and their original survey data is preserved verbatim for reinstatement
+    assert "start_latitude" in detail.columns
+    assert detail.iloc[0]["start_latitude"] == pytest.approx(49.260)
+
+
+def test_removed_sheets_are_empty_when_nothing_was_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(regions, "_PATH", str(tmp_path / "no-regions.json"))
+    sid = _make_session(tmp_path, monkeypatch, clean_day_rows())
+    _, dofile_path = generate.generate_cleaned_and_dofile(sid)
+    sheets = pd.read_excel(dofile_path, sheet_name=None)
+    n = dict(zip(sheets["removed summary"]["Measure"], sheets["removed summary"]["Count"]))
+    assert n["People removed entirely"] == 0
+    assert n["Days removed (total)"] == 0
+    assert sheets["removed rows"].empty

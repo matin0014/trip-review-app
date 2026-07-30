@@ -27,8 +27,8 @@ from collections import defaultdict
 from datetime import datetime
 
 from app import charts, metrics, regions, routing, session
-from app.decisions import (excluded_days, fixpoint, manual_ops, replay, resolutions,
-                           trip_comments)
+from app.decisions import (day_overrides, excluded_days, fixpoint, manual_ops, replay,
+                           resolutions, trip_comments)
 from engine.classify import group_person_days
 from engine.ids import project_trip_id
 from engine.loader import load_trips
@@ -429,7 +429,8 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                     comments: dict = None) -> tuple:
     """Project the whole dataset once: ``(tid, removed, extras, flag_by_row,
     overrides, mode_overrides, time_overrides, purpose_overrides, excluded_rows,
-    merge_overrides, position_overrides, comment_by_row)``. ``merge_overrides`` =
+    merge_overrides, position_overrides, comment_by_row, zero_move_days)``.
+    ``merge_overrides`` =
     {kept merge row: live merged trip}, cleaned-only, folds every leg (incl. an
     added one) into the one kept row. ``position_overrides`` = {raw_row: live
     trip} from manual repositions (plain kept rows only -- see `clean_day`).
@@ -446,7 +447,9 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     `time_overrides` = {raw_row: (start_ts, end_ts)} from manual time edits;
     `purpose_overrides` = {raw_row: purpose} from manual purpose changes;
     `excluded_rows` = every raw row of an excluded (out-of-region, not recovered)
-    person-day. When `res_map` (flag_id -> resolution) is given, `flag_by_row` maps
+    person-day; `zero_move_days` = {day_key: representative raw_row} for days the
+    participant did not travel at all (see below).
+    When `res_map` (flag_id -> resolution) is given, `flag_by_row` maps
     raw_row -> ["<type>:<resolution>", ...] for the Do-file; otherwise it is empty.
     Shared by the cleaned xlsx and the Do-file so they never disagree. ``all_ops``
     is the full ordered list of active manual ops from `decisions.manual_ops`;
@@ -466,6 +469,7 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
     position_overrides: dict = {}
     comment_by_row: dict = {}
     excluded_rows: set = set()
+    zero_move_days: dict = {}
     comments = comments or {}
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
@@ -489,7 +493,22 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         present = {r for r, _ in rows}
         for r, t in rows:
             tid[r] = t
-        removed |= {x.raw_row for x in day_trips} - present
+        day_rows = {x.raw_row for x in day_trips}
+        removed |= day_rows - present
+
+        # A day the participant did not travel at all. Every logged trip was an
+        # accepted zero_move (GPS drift while stationary) and nothing replaced
+        # them, so the whole day would otherwise vanish from the cleaned file and
+        # read as "no data" rather than the finding it actually is: this person
+        # stayed put. `clean_day` only removes rows for two reasons, an accepted
+        # zero_move or a manual delete, so "all rows gone and none deleted by
+        # hand" is exactly "all rows were zero_move". A manual delete is the
+        # reviewer calling a record junk, which is NOT a claim about movement,
+        # so such a day is deliberately left out.
+        hand_deleted = {op["raw_row"] for op in day_ops
+                        if op.get("type") == "manual_delete"}
+        if day_rows and not present and not day_extras and not (day_rows & hand_deleted):
+            zero_move_days[day_key] = min(day_rows)
         extras += day_extras
         overrides.update(day_overrides)
         mode_overrides.update(day_mode_overrides)
@@ -505,7 +524,48 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
                     flag_by_row[r].append(tag)
     return (tid, removed, extras, flag_by_row, overrides, mode_overrides,
             time_overrides, purpose_overrides, excluded_rows, merge_overrides,
-            position_overrides, comment_by_row)
+            position_overrides, comment_by_row, zero_move_days)
+
+
+ZERO_MOVE_NOTE = "zero movement day"
+
+# Blanked on a zero-movement row: everything describing a JOURNEY, because no
+# journey happened. What stays is who and when (accessCode / dates / weekday),
+# the row's provenance (wave_row), and the person-level survey columns, which
+# are attributes of the participant rather than of a trip -- without those the
+# row could not be joined to anything and would be unusable.
+_ZERO_MOVE_BLANK_COLS = (
+    "start_time", "end_time", "time_duration", "identifier",
+    "mode_of_travel", "purpose_of_travel", "routes",
+    "start_latitude", "start_longitude", "end_latitude", "end_longitude",
+)
+
+
+def _zero_move_day_rows(df, zero_move_days: dict, cols: list) -> list:
+    """One placeholder row per day the participant did not travel.
+
+    Such a day has every trip removed as an accepted zero_move, so it would
+    otherwise disappear from the cleaned file entirely and be indistinguishable
+    from a day the participant never reported. Keeping one blanked row preserves
+    the day as an observation: this person was surveyed and did not travel.
+
+    The row is built from a real workbook row of that day (so it keeps that day's
+    identity and survey columns), with the journey columns emptied, an ``R<row>``
+    trip_id, and a fixed note."""
+    rows = []
+    n = len(df)
+    for _day_key, raw_row in sorted(zero_move_days.items(), key=lambda kv: kv[1]):
+        i = raw_row - 1
+        if not (0 <= i < n):
+            continue
+        row = {c: df.iloc[i].get(c) for c in cols}
+        for c in _ZERO_MOVE_BLANK_COLS:
+            if c in row:
+                row[c] = None
+        row["trip_id"] = project_trip_id("zero_move", raw_row=raw_row)
+        row["comment"] = ZERO_MOVE_NOTE
+        rows.append(row)
+    return rows
 
 
 def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
@@ -525,7 +585,7 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     df = pd.read_excel(raw_path).reset_index(drop=True)
     (tid, removed, extras, _, overrides, mode_overrides, time_overrides,
      purpose_overrides, excluded_rows, merge_overrides, position_overrides,
-     comment_by_row) = project_dataset(
+     comment_by_row, zero_move_days) = project_dataset(
         raw_path, accepted_ids, params, all_ops=all_ops, excluded=excluded,
         comments=comments)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
@@ -561,6 +621,11 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
     keep = [(i + 1) not in dropped for i in range(n)]
     cleaned = df[keep].copy()
 
+    zm_rows = _zero_move_day_rows(df, zero_move_days, list(cleaned.columns))
+    if zm_rows:
+        cleaned = pd.concat([cleaned, pd.DataFrame(zm_rows, columns=list(cleaned.columns))],
+                            ignore_index=True)
+
     if extras:  # append synthesized rows: A = missing-trip stubs, Q = reviewed gaps
         cols = list(cleaned.columns)
         added = []
@@ -575,7 +640,8 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
             row["comment"] = _note_for_trip(comments, trip)
             added.append(row)
         cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
-        cleaned = _sort_chronologically(cleaned)  # slot A/Q/split rows into their real spot
+    if extras or zm_rows:
+        cleaned = _sort_chronologically(cleaned)  # slot A/Q/split/zero-move rows into place
     return cleaned
 
 
@@ -619,7 +685,8 @@ def _extra_ids(extras: list) -> list:
     return out
 
 
-_STATUS = {"M": "merged", "R": "removed", "A": "added", "Q": "reviewed-gap", "S": "split"}
+_STATUS = {"M": "merged", "R": "removed", "A": "added", "Q": "reviewed-gap", "S": "split",
+           "Z": "zero-movement"}
 
 
 def _status_of(trip_id: str) -> str:
@@ -650,7 +717,7 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     comments = comments or {}
     (tid, removed, extras, flag_by_row, overrides, mode_overrides, time_overrides,
      purpose_overrides, excluded_rows, _merge_overrides, position_overrides,
-     comment_by_row) = project_dataset(
+     comment_by_row, _zero_move_days) = project_dataset(
         raw_path, accepted_ids, params, res_map, all_ops=all_ops, excluded=excluded,
         comments=comments)
     _apply_split_a_overrides(df, overrides)  # truncate kept split rows to their A piece
@@ -702,6 +769,75 @@ def excluded_day_keys(raw_path: str, events: list) -> set:
     return excluded_days(events, auto_out)
 
 
+def build_removed_dfs(raw_path: str, events: list, excluded: set):
+    """``(summary_df, rows_df)`` accounting for everything dropped as a whole DAY.
+
+    A day leaves the dataset either because the reviewer removed it by hand or
+    because it falls outside the study regions and was not recovered. Both are
+    invisible in the cleaned file by design, which makes "how much was dropped,
+    and from whom" unanswerable from the deliverable alone. These two sheets are
+    that record.
+
+    A PERSON counts as removed when EVERY one of their days is gone, i.e. they
+    contribute nothing at all to the cleaned dataset -- as opposed to someone who
+    merely lost a day or two. Both numbers matter, so the summary reports the
+    fully-removed people separately from the partially-affected ones.
+
+    `rows_df` is every raw row of those days, verbatim, plus which day it came
+    from and why it went -- so a dropped participant can still be inspected, or
+    reinstated, without going back to the pre-review workbook.
+    """
+    import pandas as pd
+
+    df = pd.read_excel(raw_path).reset_index(drop=True)
+    trips = load_trips(raw_path)
+    days = group_person_days(trips)
+
+    by_person: dict = defaultdict(set)
+    for (person, date) in days:
+        by_person[person].add(f"{person}|{date}")
+    hand_removed = {k for k, inc in day_overrides(events).items() if not inc}
+
+    removed_people = sorted(p for p, keys in by_person.items() if keys and keys <= excluded)
+    partial_people = sorted(p for p, keys in by_person.items()
+                            if keys & excluded and not keys <= excluded)
+
+    rows = []
+    for (person, date), day_trips in days.items():
+        day_key = f"{person}|{date}"
+        if day_key not in excluded:
+            continue
+        reason = "removed by reviewer" if day_key in hand_removed else "outside study region"
+        for t in day_trips:
+            i = t.raw_row - 1
+            if not (0 <= i < len(df)):
+                continue
+            rows.append({"day_key": day_key, "person": person, "date": str(date),
+                         "reason": reason,
+                         "person_fully_removed": person in removed_people,
+                         "trip_id": project_trip_id("remove", raw_row=t.raw_row),
+                         **df.iloc[i].to_dict()})
+    rows_df = pd.DataFrame(rows)
+    if not rows_df.empty:
+        rows_df = rows_df.sort_values(["person", "date", "trip_id"]).reset_index(drop=True)
+
+    n_hand = len({k for k in excluded if k in hand_removed})
+    summary = [
+        ("People removed entirely", len(removed_people),
+         "Every one of their days was dropped, so they contribute no trips to the cleaned file."),
+        ("People who lost some days", len(partial_people),
+         "Still present in the cleaned file, but with fewer days than they reported."),
+        ("Days removed (total)", len(excluded), "Person-days dropped, for either reason below."),
+        ("  ...removed by the reviewer", n_hand, "Dropped by hand with the remove-day action."),
+        ("  ...outside the study region", len(excluded) - n_hand,
+         "Auto-dropped as out-of-region and not reinstated by the reviewer."),
+        ("Trips removed with those days", len(rows_df),
+         "Raw survey rows belonging to the dropped days; each one is listed on the detail sheet."),
+    ]
+    summary_df = pd.DataFrame(summary, columns=["Measure", "Count", "What it means"])
+    return summary_df, rows_df
+
+
 def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     """Atomically write cleaned.xlsx + dofile.xlsx; return (cleaned, dofile) paths."""
     raw_path = os.path.join(session.session_dir(sid), session.read_proposals(sid)["raw_name"])
@@ -718,7 +854,10 @@ def generate_cleaned_and_dofile(sid: str, params=DEFAULT) -> tuple:
     dofile_df = build_dofile_df(raw_path, accepted, res_map, params, all_ops=ops,
                                 excluded=excluded, comments=comments)
     precision_df = build_precision_df(raw_path, events, params)
-    _write_atomic_xlsx_sheets({"dofile": dofile_df, "precision": precision_df}, dofile)
+    removed_summary_df, removed_rows_df = build_removed_dfs(raw_path, events, excluded)
+    _write_atomic_xlsx_sheets({"dofile": dofile_df, "precision": precision_df,
+                               "removed summary": removed_summary_df,
+                               "removed rows": removed_rows_df}, dofile)
     return cleaned, dofile
 
 
