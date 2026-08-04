@@ -55,15 +55,29 @@ def rounded_hour(hhmm: str):
     return (h + (1 if mi >= 30 else 0)) % 24
 
 
-def collapse_count(day: pd.DataFrame) -> int:
-    """Trips on one person-day, with two outings that log as two trips counted once.
+# Riding "Transit" is a MODE in this survey, not a purpose; the purpose that
+# marks the walk to the stop is "Travel to transit stop". Every mode that is a
+# transit ride counts, since the access leg belongs to the journey whether the
+# ride is a bus, the SkyTrain or the SeaBus.
+TRANSIT_MODES = {"Transit", "Transit Bus", "SkyTrain", "SeaBus"}
+STOP_PURPOSE = "Travel to transit stop"
 
-    Both rules describe a single journey the survey happens to split:
+
+def collapse_count(day: pd.DataFrame) -> tuple:
+    """``(trips, {rule: legs folded away})`` for one person-day.
+
+    Three rules, each describing ONE journey the survey happens to log as
+    several trips. This only ever affects the trips-per-person-day average --
+    the cleaned dataset itself is never rewritten:
+
       * consecutive Shopping trips -- shop, then shop again, is one shopping trip;
       * a Walk for Recreation followed by a Walk Returning Home -- the walk back
-        is the return leg of the same recreational walk, not a second outing.
+        is the return leg of the same recreational walk, not a second outing;
+      * a trip whose purpose is "Travel to transit stop" followed by a transit
+        ride -- getting to the stop is the access leg of that transit journey.
     """
     rows = day.to_dict("records")
+    folded = {"shopping": 0, "recreational walk": 0, "transit access": 0}
     n = i = 0
     while i < len(rows):
         cur = rows[i]
@@ -71,13 +85,19 @@ def collapse_count(day: pd.DataFrame) -> int:
         if cur["_purpose"] == "Shopping":
             while i + 1 < len(rows) and rows[i + 1]["_purpose"] == "Shopping":
                 i += 1
+                folded["shopping"] += 1
         elif (cur["_mode"] == "Walk" and cur["_purpose"] == "Recreation"
               and nxt is not None and nxt["_mode"] == "Walk"
               and nxt["_purpose"] == "Returning Home"):
             i += 1
+            folded["recreational walk"] += 1
+        elif (cur["_purpose"] == STOP_PURPOSE
+              and nxt is not None and nxt["_mode"] in TRANSIT_MODES):
+            i += 1
+            folded["transit access"] += 1
         n += 1
         i += 1
-    return n
+    return n, folded
 
 
 def render(trips: pd.DataFrame, person_days: pd.DataFrame, title: str,
@@ -91,8 +111,13 @@ def render(trips: pd.DataFrame, person_days: pd.DataFrame, title: str,
     counts = binned.astype(int).value_counts().reindex(range(24), fill_value=0)
 
     ordered = trips.sort_values(["accessCode", "start_date", "start_time"])
-    adjusted = int(ordered.groupby(["accessCode", "start_date"], sort=False)
-                   .apply(collapse_count).sum())
+    adjusted = 0
+    folded = {"shopping": 0, "recreational walk": 0, "transit access": 0}
+    for _key, day in ordered.groupby(["accessCode", "start_date"], sort=False):
+        n, f = collapse_count(day)
+        adjusted += n
+        for k, v in f.items():
+            folded[k] += v
     raw_n = len(trips)
     avg_raw, avg_adj = raw_n / n_person_days, adjusted / n_person_days
 
@@ -130,20 +155,21 @@ def render(trips: pd.DataFrame, person_days: pd.DataFrame, title: str,
                 f"  ·  {n_person_days:,} person-days)")
     fig.text(0.075, 0.185, headline, fontsize=11.5, color=INK, va="top")
     fig.text(0.075, 0.135, (
-        f"Unadjusted it is {avg_raw:.2f}. The adjusted figure counts as ONE trip: "
-        "consecutive shopping trips, and a Walk for Recreation\n"
-        "followed by a Walk Returning Home (the walk back is the return leg of one "
-        "recreational outing, not a second trip).\n"
-        "Trips exclude Q rows (reviewed activity gaps) and Z rows (no-travel days), "
-        "neither of which is a journey. Days on which a\n"
-        "participant did not travel still count as person-days, so the average is not "
-        "inflated by dropping them."),
+        f"Unadjusted it is {avg_raw:.2f}. The adjusted figure counts one JOURNEY as one trip, "
+        "folding together: consecutive shopping\n"
+        "trips; a Walk for Recreation followed by a Walk Returning Home (the walk back "
+        "is that outing's return leg); and a trip to a\n"
+        "transit stop followed by the transit ride (the access leg of that journey). "
+        "The cleaned dataset itself is unchanged.\n"
+        "Trips exclude Q rows (reviewed activity gaps) and Z rows (no-travel days), neither "
+        "being a journey; no-travel days still\n"
+        "count as person-days, so the average is not inflated by dropping them."),
         fontsize=8.8, color=MUTED, va="top", linespacing=1.6)
 
     fig.savefig(out_png, dpi=160, facecolor="white")
     return {"png": out_png, "trips": raw_n, "adjusted": adjusted,
             "person_days": n_person_days, "people": n_people,
-            "avg_raw": avg_raw, "avg_adj": avg_adj,
+            "avg_raw": avg_raw, "avg_adj": avg_adj, "folded": folded,
             "unparsed": int(len(trips) - len(binned))}
 
 
@@ -171,6 +197,7 @@ def main() -> None:
         print(f"  trips {r['trips']} | adjusted {r['adjusted']} "
               f"| person-days {r['person_days']} | people {r['people']}")
         print(f"  avg/person-day  raw {r['avg_raw']:.3f} | adjusted {r['avg_adj']:.3f}")
+        print(f"  legs folded away: {sum(r['folded'].values())}  {r['folded']}")
         print(f"  unparseable start times excluded: {r['unparsed']}")
 
 
