@@ -232,7 +232,17 @@ def _purpose_bars(series, counts, title, xlabel, out, headline_text):
     plt.close(fig)
 
 
+# Dropped from the by-purpose charts. "Returning Home" is not an out-of-home
+# activity at all: the gap after a homeward trip is time spent AT HOME until the
+# next departure, so it measures dwell-at-home and would sit near the top of a
+# chart about what people go out to do. "Not recorded" is the absence of an
+# answer. Both stay in the overall duration histogram, which is about gaps
+# between trips rather than activity types.
+EXCLUDED_PURPOSES = {"Returning Home", "Not recorded"}
+
+
 def chart_activity_by_purpose(recs, out_episode, out_perday):
+    recs = recs[~recs["purpose"].isin(EXCLUDED_PURPOSES)]
     episode = recs.groupby("purpose")["hours"].mean()
     n_ep = recs.groupby("purpose")["hours"].size()
     _purpose_bars(episode, n_ep,
@@ -333,13 +343,16 @@ def main() -> None:
     chart_modes(trips, f"{OUT_DIR}/mode_counts.png")
 
     print(f"trips {len(trips):,} | person-days {len(days):,} | activities {len(recs):,}")
+    charted = recs[~recs["purpose"].isin(EXCLUDED_PURPOSES)]   # match the charts
+    print(f"by-purpose charts exclude {sorted(EXCLUDED_PURPOSES)}: "
+          f"{len(charted):,} episodes charted")
     print("\nmean hours per EPISODE by purpose:")
-    ep = recs.groupby("purpose")["hours"].agg(["mean", "size"]).sort_values("mean",
-                                                                           ascending=False)
+    ep = charted.groupby("purpose")["hours"].agg(["mean", "size"]).sort_values(
+        "mean", ascending=False)
     for p, r in ep.iterrows():
         print(f"  {p:<45} {r['mean']:5.2f} h  (n={int(r['size']):,})")
     print("\nmean hours PER DAY by purpose (days the activity occurred):")
-    pd_ = (recs.groupby(["accessCode", "start_date", "purpose"])["hours"].sum()
+    pd_ = (charted.groupby(["accessCode", "start_date", "purpose"])["hours"].sum()
            .reset_index().groupby("purpose")["hours"].agg(["mean", "size"])
            .sort_values("mean", ascending=False))
     for p, r in pd_.iterrows():
