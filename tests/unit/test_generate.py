@@ -257,3 +257,38 @@ def test_deleting_a_merged_trip_removes_every_member_from_the_file():
     rows, _extras, *_ = clean_day(trips, accepted, day_ops=ops)
     assert _kept_workbook_rows(rows) <= live
     assert _kept_workbook_rows(rows) == set()      # the whole merged trip is gone
+
+
+# --- splitting a MERGED trip must not lose its members ----------------------
+
+def test_splitting_a_merged_trip_keeps_every_member_row():
+    # The fixpoint applies accepted merges BEFORE manual ops, so accepting a
+    # fragment on (1, 2) and then splitting hands `_apply_split` a trip that
+    # already carries both rows. Building the halves without `absorbed` dropped
+    # that membership: row 2 then belonged to no live trip, so the export either
+    # emitted it with stale pre-merge values or (once the export started trusting
+    # `live`) dropped it entirely. 58 rows across the four wave-2 splits.
+    trips = conflict_day()
+    accepted = {fid(trips, "fragment")}
+    split_at = (BASE + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    ops = [{"type": "manual_split", "raw_row": 1, "split_ts": split_at}]
+
+    live = _live_rows(trips, accepted, ops)
+    assert {1, 2} <= live, f"workbook rows missing from the live view: {{1, 2}} - {live}"
+
+    rows, extras, *_ = clean_day(trips, accepted, day_ops=ops)
+    exported = _kept_workbook_rows(rows)
+    assert exported == {1, 2}          # both rows reach the cleaned file
+    assert any(kind == "split" for kind, _ref, _t in extras)   # ...and the B piece
+
+
+def test_the_split_halves_of_a_merged_trip_still_cover_its_whole_span():
+    trips = conflict_day()
+    accepted = {fid(trips, "fragment")}
+    split_at = (BASE + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    from app.decisions import fixpoint
+    merged, _ = fixpoint(trips, accepted)
+    live, _ = fixpoint(trips, accepted,
+                       ops=[{"type": "manual_split", "raw_row": 1, "split_ts": split_at}])
+    assert min(t.start_ts for t in live) == min(t.start_ts for t in merged)
+    assert max(t.end_ts for t in live) == max(t.end_ts for t in merged)

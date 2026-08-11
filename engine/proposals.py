@@ -277,6 +277,17 @@ def _apply_split(trips: list, op: dict) -> list:
         purpose=orig.purpose, start_ts=orig.start_ts, end_ts=split_ts,
         start_lat=orig.start_lat, start_lon=orig.start_lon,
         end_lat=a_end[0], end_lon=a_end[1], route=a_route,
+        # A MERGED trip can be split: the fixpoint applies accepted merges before
+        # manual ops, so accepting a fragment on (1, 2) and then splitting hands
+        # `_apply_split` a trip that already carries both rows. Building the halves
+        # without `absorbed` dropped that membership, and every workbook row folded
+        # into the merge then belonged to no live trip at all -- 58 rows across the
+        # four wave-2 splits, exported with stale pre-merge values before the export
+        # started trusting `live`, and silently absent from the cleaned file after.
+        # The A piece keeps the whole set: it holds the origin raw_row, so the group
+        # stays anchored to a real workbook row (B's is synthetic and negative, which
+        # would make the merge group's id negative too).
+        absorbed=orig.absorbed,
     )
     trip_b = Trip(
         raw_row=b_row, person=orig.person, mode=op.get("mode_b") or orig.mode,
