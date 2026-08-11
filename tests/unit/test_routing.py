@@ -173,3 +173,69 @@ def test_straight_line_distance_m_matches_haversine():
     d = routing.straight_line_distance_m(49.0, -123.0, 49.1, -123.1)
     assert d == haversine_m(49.0, -123.0, 49.1, -123.1)
     assert d > 0
+
+
+# --- merge seams on a transit trip follow the network, not the road ----------
+
+def _rail_trip(pairs, mode="SkyTrain", absorbed=frozenset({1, 2})):
+    """Like `_trip` but placed on the real Expo Line and given a transit mode, so
+    the seam fill has actual track to snap to. `pairs` = [(lat, lon, minute)]."""
+    route = [RoutePoint(lat, lon, _BASE + timedelta(minutes=m)) for lat, lon, m in pairs]
+    return Trip(raw_row=1, person="p", mode=mode, purpose="",
+                start_ts=route[0].ts, end_ts=route[-1].ts,
+                start_lat=route[0].lat, start_lon=route[0].lon,
+                end_lat=route[-1].lat, end_lon=route[-1].lon,
+                route=route, absorbed=absorbed)
+
+
+# Waterfront -> Commercial-Broadway, both on the Expo Line
+_WF = (49.2857, -123.1119)
+_CB = (49.2626, -123.0692)
+
+
+def test_a_merged_skytrain_seam_follows_the_track(monkeypatch):
+    # OSRM must not be consulted at all: the ride happened on rails, and the
+    # public server has no rail profile, so its answer would be a road route.
+    monkeypatch.setattr(routing, "osrm_route",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("a rail seam must not ask OSRM")))
+    merged = _rail_trip([(_WF[0], _WF[1], 0), (_CB[0], _CB[1], 20)])
+    out = routing.fill_route_gaps(merged)
+    assert len(out.route) > 2                       # real track spliced in
+    assert (out.route[0].lat, out.route[0].lon) == _WF     # real fixes preserved
+    assert (out.route[-1].lat, out.route[-1].lon) == _CB
+    assert all(a.ts <= b.ts for a, b in zip(out.route, out.route[1:]))
+    # the track bends; a straight line between the two would not
+    lons = [p.lon for p in out.route]
+    assert max(lons) - min(lons) > 0.03
+
+
+def test_a_seam_far_from_any_track_still_uses_osrm(monkeypatch):
+    # Labelled SkyTrain but nowhere near the network (an Okanagan participant),
+    # so forcing it onto rails would invent a journey across the province.
+    _fake_osrm(monkeypatch)
+    merged = _rail_trip([(49.88, -119.50, 0), (49.94, -119.40, 20)])
+    out = routing.fill_route_gaps(merged)
+    assert len(out.route) == len(merged.route) + 4   # the stub OSRM path, not track
+
+
+def test_a_walking_merge_seam_is_unaffected(monkeypatch):
+    # The existing behaviour for every non-transit mode must not change.
+    seen = {}
+    def fake(lat1, lon1, lat2, lon2, mode=None):
+        seen["mode"] = mode
+        return [[lat1, lon1], [lat2, lon2]]
+    monkeypatch.setattr(routing, "osrm_route", fake)
+    merged = _trip([(0, 0), (80, 2), (3400, 30)], absorbed=frozenset({1, 2}))
+    routing.fill_route_gaps(merged)
+    assert seen["mode"] == "Walk"
+
+
+def test_a_merged_seabus_seam_crosses_on_the_seabus_route(monkeypatch):
+    monkeypatch.setattr(routing, "osrm_route",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("a SeaBus seam must not ask OSRM")))
+    merged = _rail_trip([(49.28651, -123.110526, 0), (49.309322, -123.084112, 15)],
+                        mode="SeaBus")
+    out = routing.fill_route_gaps(merged)
+    assert len(out.route) > 2
