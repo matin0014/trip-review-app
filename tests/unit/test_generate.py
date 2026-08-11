@@ -193,3 +193,67 @@ def test_extra_ids_labels_split_b():
     b = leg(99, 30, 0, 5, 0.0, 0.0)
     (trip_id, kind, _trip), = _extra_ids([("split", 7, b)])
     assert trip_id == "S7-B" and kind == "split"
+
+
+# --- the cleaned file may only contain rows the fixpoint kept ---------------
+#
+# Regression: `clean_day` re-derives its `removed` set from two known reasons
+# (an accepted zero_move, a manual delete), but the fixpoint drops rows for
+# other reasons too -- notably an accepted merge whose partner was then removed,
+# which takes the WHOLE group out of `live`. The survivors used to fall through
+# to the plain-keep branch and reach the cleaned file with their original times
+# and coordinates, looking like ordinary untouched trips (185 such rows across
+# the four wave-2 splits). `live` is the authority on what survived.
+
+def _live_rows(trips, accepted, ops=None):
+    from app.decisions import fixpoint
+    live, _ = fixpoint(trips, accepted, ops=ops or [])
+    out = set()
+    for t in live:
+        out |= {t.raw_row} | set(t.absorbed)
+    return out
+
+
+def _kept_workbook_rows(rows):
+    """Rows clean_day puts in the cleaned file (M-ids included, they are real
+    workbook rows folded into a merge)."""
+    return {r for r, _tid in rows}
+
+
+def test_zero_moved_merge_member_does_not_drag_its_partner_into_the_file():
+    # conflict_day: fragment(1,2) + zero_move(2). Accepting BOTH makes the
+    # fixpoint merge them, re-classify the merged trip, and (still barely moving)
+    # remove it under the same content-hashed zero_move id. Neither row survives,
+    # so neither may be exported.
+    trips = conflict_day()
+    accepted = {fid(trips, "fragment"), fid(trips, "zero_move")}
+    live = _live_rows(trips, accepted)
+    rows, _extras, *_ = clean_day(trips, accepted)
+    assert _kept_workbook_rows(rows) <= live
+
+
+def test_every_exported_row_is_one_the_fixpoint_kept():
+    # The general invariant, over each subset of decisions that can be made on a
+    # day where a fragment and a zero_move overlap.
+    import itertools
+    trips = conflict_day()
+    ids = {"fragment": fid(trips, "fragment"), "zero_move": fid(trips, "zero_move")}
+    for n in range(len(ids) + 1):
+        for combo in itertools.combinations(sorted(ids.values()), n):
+            accepted = set(combo)
+            live = _live_rows(trips, accepted)
+            rows, _extras, *_ = clean_day(trips, accepted)
+            leaked = _kept_workbook_rows(rows) - live
+            assert not leaked, f"accepted={accepted} leaked rows {leaked}"
+
+
+def test_deleting_a_merged_trip_removes_every_member_from_the_file():
+    # Deleting what the screen shows as ONE merged trip must not leave its other
+    # half behind: the op names only the group's root row.
+    trips = conflict_day()
+    accepted = {fid(trips, "fragment")}
+    ops = [{"type": "manual_delete", "raw_row": 1}]
+    live = _live_rows(trips, accepted, ops)
+    rows, _extras, *_ = clean_day(trips, accepted, day_ops=ops)
+    assert _kept_workbook_rows(rows) <= live
+    assert _kept_workbook_rows(rows) == set()      # the whole merged trip is gone

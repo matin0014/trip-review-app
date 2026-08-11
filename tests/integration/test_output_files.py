@@ -611,3 +611,86 @@ def test_removed_sheets_are_empty_when_nothing_was_dropped(tmp_path, monkeypatch
     assert n["People removed entirely"] == 0
     assert n["Days removed (total)"] == 0
     assert sheets["removed rows"].empty
+
+
+# --- rows the fixpoint dropped must not reappear in the cleaned file --------
+#
+# Regression, found by reconciling the in-app start-times chart (which counts
+# `live` trips) against the export: they disagreed by 185 rows across the four
+# wave-2 splits. Accepting a merge and then removing ONE member takes the whole
+# group out of `live` -- the reviewer's screen shows no such trip -- but the
+# export's `removed` set only names the member that was explicitly removed, so
+# the survivors fell through to the plain-keep branch and were exported with
+# their original times and coordinates, indistinguishable from untouched trips.
+# Three different removals trigger it; all three are pinned here.
+
+def _fragment_pair():
+    """Two trips <200 m and <3 min apart, so a short-gap `fragment` fires."""
+    return [
+        trip("09:00:00", "09:20:00", 49.260, -123.120, 49.278, -123.120),
+        trip("09:21:00", "09:40:00", 49.2781, -123.1201, 49.296, -123.120),
+    ]
+
+
+def _live_rows(sid, day_key=DAY_KEY):
+    """The raw rows the reviewer's screen still accounts for."""
+    from app import decisions, state
+    events = session.read_events(sid)
+    res = decisions.resolutions(events)
+    accepted = {f for f, r in res.items() if r in decisions.APPLY_RESOLUTIONS}
+    ops = [o for o in decisions.manual_ops(events) if o.get("day_key") == day_key]
+    state.clear(sid)
+    live, _ = decisions.fixpoint(state.day_trips(sid, day_key), accepted, ops=ops)
+    rows = set()
+    for t in live:
+        rows |= {t.raw_row} | set(t.absorbed)
+    state.clear(sid)
+    return rows
+
+
+def test_merge_member_deleted_does_not_resurrect_the_other_half(tmp_path, monkeypatch):
+    # Accept "these two are one journey", then delete it. On screen that is ONE
+    # merged trip being deleted, so neither half may survive the export.
+    sid = _make_session(tmp_path, monkeypatch, _fragment_pair())
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "fragment"), "resolution": "accept"})
+    session.append_event(sid, {"type": "manual_delete", "raw_row": 1, "day_key": DAY_KEY})
+
+    assert _live_rows(sid) == set()                 # the reviewer sees nothing left
+    cleaned, dofile = _export(sid)
+    assert tids(cleaned) == []                      # ...so the deliverable has nothing
+    assert set(tids(dofile)) == {"R1", "R2"}        # both audited as removed
+
+
+def test_merge_member_split_does_not_resurrect_the_other_half(tmp_path, monkeypatch):
+    # Splitting a member re-shapes the group; the export must follow `live`
+    # rather than exporting the untouched partner as an ordinary trip.
+    sid = _make_session(tmp_path, monkeypatch, _fragment_pair())
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "fragment"), "resolution": "accept"})
+    session.append_event(sid, {"type": "manual_split", "raw_row": 1, "day_key": DAY_KEY,
+                               "split_ts": f"{DATE}T09:10:00", "mode_a": "Walk",
+                               "mode_b": "Walk"})
+
+    live = _live_rows(sid)
+    cleaned, _ = _export(sid)
+    plain = {int(t) for t in tids(cleaned) if str(t).isdigit()}
+    assert plain <= live, f"exported {plain - live} which the fixpoint had dropped"
+
+
+def test_no_cleaned_row_is_ever_absent_from_the_live_view(tmp_path, monkeypatch):
+    # The general invariant the three cases above are instances of: every
+    # workbook row in the cleaned file must be one the reviewer's screen shows.
+    sid = _make_session(tmp_path, monkeypatch, _fragment_pair() + [
+        trip("11:00:00", "11:20:00", 49.296, -123.120, 49.314, -123.120)])
+    session.append_event(sid, {"type": "decision",
+                               "flag_id": flag_id(sid, "fragment"), "resolution": "accept"})
+    session.append_event(sid, {"type": "manual_delete", "raw_row": 2, "day_key": DAY_KEY})
+
+    live = _live_rows(sid)
+    cleaned, _ = _export(sid)
+    for t in tids(cleaned):
+        if str(t).isdigit():
+            assert int(t) in live
+        elif str(t).startswith("M"):
+            assert int(str(t)[1:]) in live

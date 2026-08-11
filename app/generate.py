@@ -146,11 +146,31 @@ def clean_day(day_trips: list, accepted_ids: set, day_ops: list = None,
                 if lt is not None:
                     position_overrides[r] = lt
 
+    # Every workbook row `live` still accounts for, either standing alone or
+    # folded into a merged trip. `removed` above is a RE-DERIVATION of two known
+    # removal reasons (an accepted zero_move, a manual delete), and it cannot
+    # cover every reason the fixpoint drops a row -- an accepted merge whose
+    # partner was deleted, zero_moved, or split takes the WHOLE group out of
+    # `live`, yet only the partner is named in `removed`. The surviving members
+    # then fell through to the plain-keep branch below and were exported with
+    # their original times and coordinates, looking like ordinary untouched
+    # trips: 185 such rows across the four wave-2 splits, 3.9% of the dataset.
+    # So `live` is the authority on WHAT SURVIVED, exactly as it already is on
+    # how survivors are grouped (see merged_root above). A row it does not
+    # account for is not in the cleaned file; `project_dataset` derives the
+    # Do-file's R<row> entries from whatever is missing here, so those rows
+    # stay auditable rather than vanishing silently.
+    live_rows: set = set()
+    for t in live:
+        live_rows |= {t.raw_row} | set(t.absorbed)
+
     rows: list = []
     overrides: dict = {}
     for t in sorted(day_trips, key=lambda x: x.start_ts):
         if t.raw_row in removed:
             continue  # R<row> lives in the Do-file only, not the cleaned file
+        if t.raw_row not in live_rows:
+            continue  # the fixpoint dropped it; the reviewer's screen has no such trip
         # MERGE WINS over split-origin: a row can be both (split a trip, then merge
         # its A piece with a neighbour). The A piece is inside the merged trip now,
         # so this row must take the M-id and be collapsed into the group's kept row.
