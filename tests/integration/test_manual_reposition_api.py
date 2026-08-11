@@ -120,3 +120,87 @@ def test_reposition_missing_fields_is_400(client):
     c, sid = client
     r = c.post(f"/api/{sid}/manual_reposition", json={"raw_row": 1, "day_key": DAY_KEY})
     assert r.status_code == 400
+
+
+# --- transit trips are patched along the network, not the road ---------------
+
+# Waterfront and Commercial-Broadway, both on the real Expo Line
+_WF = (49.2857, -123.1119)
+_CB = (49.2626, -123.0692)
+
+
+def _rail_rows():
+    """One SkyTrain trip whose breadcrumbs sit on the Expo Line."""
+    pts = [(_WF[0], _WF[1], "09:00:00"), (49.2800, -123.1000, "09:10:00")]
+    return [{
+        "accessCode": PERSON, "start_date": DATE, "start_time": _ts("09:00:00"),
+        "end_date": DATE, "end_time": _ts("09:20:00"), "mode_of_travel": "SkyTrain",
+        "purpose_of_travel": "", "start_latitude": _WF[0], "start_longitude": _WF[1],
+        "end_latitude": 49.2800, "end_longitude": -123.1000,
+        "routes": _route_cell(pts),
+    }]
+
+
+@pytest.fixture
+def rail_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(session, "SESSIONS_DIR", str(tmp_path))
+    state.clear()
+    sid = "s"
+    session.write_proposals(sid, {"raw_name": "raw.xlsx"})
+    raw_path = f"{session.session_dir(sid)}/raw.xlsx"
+    pd.DataFrame(_rail_rows(), columns=RAW_COLS).to_excel(raw_path, index=False)
+    trips = load_trips(raw_path)
+    session.write_proposals(sid, baseline.build_baseline(trips, classify_all(trips), "raw.xlsx"))
+    yield server.create_app().test_client(), sid
+    state.clear()
+
+
+def _stub_walk(monkeypatch):
+    """A 2-point stand-in for OSRM. The composite legitimately routes the WALK to
+    and from the platform through OSRM; only the ride between them comes off the
+    track, so a bare stub here leaves the rail portion as the only thing that can
+    contribute a long run of points."""
+    monkeypatch.setattr(routing, "osrm_route",
+                        lambda la, lo, la2, lo2, mode=None: [[la, lo], [la2, lo2]])
+
+
+def test_repositioning_a_skytrain_end_follows_the_track(rail_client, monkeypatch):
+    # OSRM has no rail profile, so patching from it drew the correction over
+    # surface streets. Dragging the end to another station must ride the line.
+    _stub_walk(monkeypatch)
+    c, sid = rail_client
+    r = c.post(f"/api/{sid}/manual_reposition",
+               json={"raw_row": 1, "day_key": DAY_KEY, "end": "end",
+                     "lat": _CB[0], "lon": _CB[1]})
+    assert r.status_code == 200
+
+    t = _live_trip(c, sid)
+    assert t["e"] == [round(_CB[0], 6), round(_CB[1], 6)]   # lands where dropped
+    assert t["route"][-1] == [round(_CB[0], 6), round(_CB[1], 6)]
+    assert t["npts"] > 10          # real track spliced in, not a 2-point hop
+
+
+def test_repositioning_a_skytrain_start_follows_the_track(rail_client, monkeypatch):
+    _stub_walk(monkeypatch)
+    c, sid = rail_client
+    r = c.post(f"/api/{sid}/manual_reposition",
+               json={"raw_row": 1, "day_key": DAY_KEY, "end": "start",
+                     "lat": _CB[0], "lon": _CB[1]})
+    assert r.status_code == 200
+    t = _live_trip(c, sid)
+    assert t["s"] == [round(_CB[0], 6), round(_CB[1], 6)]
+    assert t["route"][0] == [round(_CB[0], 6), round(_CB[1], 6)]
+    assert t["npts"] > 10
+
+
+def test_repositioning_a_walking_trip_still_uses_osrm(client, monkeypatch):
+    # the existing behaviour for every non-transit mode must not change
+    seen = {}
+    def fake(lat1, lon1, lat2, lon2, mode=None):
+        seen["mode"] = mode
+        return [[lat1, lon1], [lat2, lon2]]
+    monkeypatch.setattr(routing, "osrm_route", fake)
+    c, sid = client
+    c.post(f"/api/{sid}/manual_reposition", json={
+        "raw_row": 1, "day_key": DAY_KEY, "end": "end", "lat": 49.280, "lon": -123.110})
+    assert seen["mode"] == "Walk"

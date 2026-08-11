@@ -155,13 +155,21 @@ def _region_status(sid: str) -> tuple:
 def _build_reposition_route(trip, end: str, lat: float, lon: float) -> list:
     """The trip's COMPLETE final route after moving its `end` ("start" or
     "end") point to (lat, lon): existing breadcrumbs are KEPT untouched, and a
-    fresh OSRM patch fills the gap between the kept portion and the new point
+    fresh patch fills the gap between the kept portion and the new point
     (falling back to no patch -- a straight line, via the existing mapview
-    start/end-marker convention -- if OSRM is unreachable, same graceful
-    degradation as everywhere else this app calls OSRM). Only the position
+    start/end-marker convention -- if routing is unreachable, same graceful
+    degradation as everywhere else this app routes). Only the position
     changes; the trip's start_ts/end_ts are untouched, so the patch's
     timestamps are squeezed into whatever window sits between the kept portion
     and the trip's own (fixed) start/end instant.
+
+    The patch comes from `routing.route_between`, the same call a manual ADD
+    uses, so a SkyTrain / SeaBus / Kelowna-bus trip is patched along the real
+    network rather than the road: OSRM has no rail profile, so dragging a
+    SkyTrain endpoint used to draw the correction over surface streets and
+    bridges the train never touches. It is directional, and returns a path
+    running from the first point to the second, so the patch still meets the
+    kept breadcrumbs at one end and the reviewer's new point at the other.
 
     Returns ``[[lat, lon, iso_ts], ...]``, ready to store in a
     `manual_reposition` op -- see `engine.proposals.apply_manual_ops`, which
@@ -173,7 +181,7 @@ def _build_reposition_route(trip, end: str, lat: float, lon: float) -> list:
             anchor_lat, anchor_lon, window_start = route[-1].lat, route[-1].lon, route[-1].ts
         else:
             anchor_lat, anchor_lon, window_start = trip.start_lat, trip.start_lon, trip.start_ts
-        coords = routing.osrm_route(anchor_lat, anchor_lon, lat, lon, trip.mode)
+        coords = routing.route_between(trip.mode, anchor_lat, anchor_lon, lat, lon)
         patch = _route_from_coords(coords, window_start, trip.end_ts) if coords else []
         if route and patch:
             patch = patch[1:]  # drop the leading point (duplicates the last kept breadcrumb)
@@ -183,7 +191,7 @@ def _build_reposition_route(trip, end: str, lat: float, lon: float) -> list:
             anchor_lat, anchor_lon, window_end = route[0].lat, route[0].lon, route[0].ts
         else:
             anchor_lat, anchor_lon, window_end = trip.end_lat, trip.end_lon, trip.end_ts
-        coords = routing.osrm_route(lat, lon, anchor_lat, anchor_lon, trip.mode)
+        coords = routing.route_between(trip.mode, lat, lon, anchor_lat, anchor_lon)
         patch = _route_from_coords(coords, trip.start_ts, window_end) if coords else []
         if route and patch:
             patch = patch[:-1]  # drop the trailing point (duplicates the first kept breadcrumb)
