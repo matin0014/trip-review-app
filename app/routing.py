@@ -112,9 +112,45 @@ def _query(profile: str, start_lat: float, start_lon: float,
 _GAP_FILL_M = 200.0
 _GAP_FILL_S = 180.0
 
+# Which offline route network (if any) a mode should try to snap to before
+# falling back to a plain OSRM street route. Metro Vancouver's bus network is
+# deliberately absent (see app.rail's module docstring): 238 overlapping routes
+# with no route number in the survey data makes nearest-line snapping a silent
+# guess. "Transit Bus" still gets Kelowna's small, low-overlap network -- a
+# Vancouver-area bus trip is simply too far from those lines and falls back
+# automatically.
+_NETWORK_OF_MODE = {"SkyTrain": "skytrain", "SeaBus": "seabus",
+                    "Transit Bus": "kelowna_bus"}
+
+# How far either side of a seam may sit from the track before we stop believing
+# the seam is a RIDE. Both fixes bracketing a rail seam are themselves on the
+# line, so a good snap is tight; this is loose enough only for the GPS drift a
+# tunnelled or elevated stretch produces. Beyond it the seam is something else
+# (a walk leg merged onto a rail leg, a mislabelled trip), and OSRM's street
+# path is the more honest answer than a confidently wrong rail path.
+_RAIL_SEAM_MAX_M = 1_000.0
+
+
+def _seam_coords(mode: str, prev, cur) -> list:
+    """The path to splice across one merge seam.
+
+    A merged SkyTrain (or SeaBus, or Kelowna bus) trip rode the network across
+    its seam, so filling that gap from OSRM draws the wrong thing entirely: the
+    public server has no rail profile, so it returns a road route, which for
+    SkyTrain means surface streets and bridges the train never touches. When the
+    mode has an offline network and both ends of the seam really are on it, the
+    track between them is the answer; everything else still goes to OSRM."""
+    network = _NETWORK_OF_MODE.get(mode)
+    if network is not None:
+        seg = rail.nearest_rail_segment(prev.lat, prev.lon, cur.lat, cur.lon, network)
+        if seg is not None and max(seg["access_m"], seg["egress_m"]) <= _RAIL_SEAM_MAX_M:
+            return seg["rail"]
+    return osrm_route(prev.lat, prev.lon, cur.lat, cur.lon, mode)
+
 
 def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_FILL_S):
-    """Route the SEAMS of a merged trip through OSM streets.
+    """Route the SEAMS of a merged trip: along the transit network when the trip
+    rode one, otherwise through OSM streets.
 
     A merge concatenates its legs' real breadcrumbs and inserts nothing between
     them, so a merge across a real gap both draws and measures as a single
@@ -137,7 +173,8 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_F
       * any OSRM failure degrades to the existing straight line.
 
     The inserted points are synthesized, not observed -- the same trade already
-    made for a hand-added trip's route.
+    made for a hand-added trip's route. `_seam_coords` decides whether a given
+    seam is filled from the transit network or from streets.
     """
     legs = len(t.absorbed)
     route = t.route or []
@@ -152,7 +189,7 @@ def fill_route_gaps(t, min_gap_m: float = _GAP_FILL_M, min_gap_s: float = _GAP_F
     out = [route[0]]
     for i, (prev, cur) in enumerate(zip(route, route[1:])):
         if i in set(gaps):
-            coords = osrm_route(prev.lat, prev.lon, cur.lat, cur.lon, t.mode)
+            coords = _seam_coords(t.mode, prev, cur)
             # drop the routed endpoints: they duplicate the real fixes we keep
             out.extend(_route_from_coords(coords, prev.ts, cur.ts)[1:-1])
         out.append(cur)
@@ -176,16 +213,6 @@ def _concat(*chunks) -> list:
             if not out or haversine_m(out[-1][0], out[-1][1], lat, lon) > 1.0:
                 out.append([lat, lon])
     return out
-
-
-# Which offline route network (if any) a manual-add mode should try to snap to
-# before falling back to a plain OSRM street route. Metro Vancouver's bus network
-# is deliberately absent (see app.rail's module docstring): 238 overlapping routes
-# with no route number in the survey data makes nearest-line snapping a silent
-# guess. "Transit Bus" still gets Kelowna's small, low-overlap network -- a
-# Vancouver-area "Transit Bus" trip is simply too far from those lines (see
-# _RAIL_MAX_ACCESS_M below) and falls back to plain OSRM automatically.
-_NETWORK_OF_MODE = {"SkyTrain": "skytrain", "SeaBus": "seabus", "Transit Bus": "kelowna_bus"}
 
 
 def route_between(mode: str, start_lat: float, start_lon: float,
