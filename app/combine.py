@@ -245,21 +245,29 @@ def combine_sessions(sessions: dict, out_dir: str, owners: dict = None,
     os.makedirs(out_dir, exist_ok=True)
     prev_dir = session_mod.SESSIONS_DIR
     cleaned_parts, dofile_parts = {}, {}
+    total = len(sessions)
     try:
         session_mod.SESSIONS_DIR = work_dir
-        for name, src in sessions.items():
+        for i, (name, src) in enumerate(sessions.items(), start=1):
             sid = os.path.basename(os.path.normpath(src))
             dest = os.path.join(work_dir, sid)
+            # regenerating a session takes a while and says nothing while it runs,
+            # so report per step: a silent multi-minute wait is indistinguishable
+            # from a hang
+            print(f"[{i}/{total}] {name}: copying session...", flush=True)
             if not os.path.exists(dest):
                 shutil.copytree(src, dest)
+            print(f"[{i}/{total}] {name}: regenerating export...", flush=True)
             state.clear(sid)
             cleaned_path, dofile_path = generate.generate_cleaned_and_dofile(sid)
             cleaned_parts[name] = pd.read_excel(cleaned_path)
             dofile_parts[name] = pd.read_excel(dofile_path, sheet_name=None)
+            print(f"[{i}/{total}] {name}: {len(cleaned_parts[name]):,} rows", flush=True)
     finally:
         session_mod.SESSIONS_DIR = prev_dir
         state.clear()
 
+    print("combining...", flush=True)
     final_cleaned = combine_cleaned(cleaned_parts, owners)
     final_dofile = combine_dofile(dofile_parts, owners)
 
