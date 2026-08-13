@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -34,10 +35,13 @@ import numpy as np
 import pandas as pd
 
 # The deliverable is filed by wave: the export workbooks under exports/<wave>/,
-# the charts drawn from them under distributions/<wave>/. Point WAVE at another
-# wave and everything else follows.
+# the charts drawn from them under distributions/<wave>/. The wave comes from the
+# command line (`... final_charts.py Wave3`) so charting another wave never means
+# editing this file -- an edit that is easy to forget to undo, which would then
+# quietly overwrite one wave's charts with another's.
 FINAL = r"C:/Users/matin001/projects/TripReview/final"
-WAVE = "Wave2"
+WAVE = sys.argv[1] if len(sys.argv) > 1 else "Wave2"
+LABEL = f"cleaned {WAVE[:4]} {WAVE[4:]} dataset".replace("  ", " ")
 CLEANED = f"{FINAL}/exports/{WAVE}/cleaned.xlsx"
 OUT_DIR = f"{FINAL}/distributions/{WAVE}"
 
@@ -192,7 +196,7 @@ def chart_start_times_by_weekday(trips, pdays, out):
     # Thursday sits above the hidden 8th cell, so `sharex` leaves its column
     # with no hour labels anywhere -- put them back on the panel itself
     axes[0][3].tick_params(labelbottom=True)
-    fig.suptitle("Trip start times by weekday, cleaned Wave 2 dataset",
+    fig.suptitle(f"Trip start times by weekday, {LABEL}",
                  fontsize=15, color=INK, x=0.05, ha="left", y=0.965)
     headline(fig, f"{len(trips):,} trips   ·   shared vertical scale, so panels compare "
                   f"directly", y=0.04)
@@ -211,7 +215,7 @@ def chart_activity_hist(recs, out):
     ax.bar(edges[:-1] + 0.25, counts, width=0.44, color=SERIES, zorder=3)
     if over:
         ax.bar([CAP + 0.25], [over], width=0.44, color=ACCENT, zorder=3)
-    frame(ax, "Activity duration between consecutive trips, cleaned Wave 2 dataset",
+    frame(ax, f"Activity duration between consecutive trips, {LABEL}",
           "Hours (30-minute bins)", "Activities")
     ax.set_xticks(list(range(0, CAP)) + [CAP + 0.25])
     ax.set_xticklabels([str(h) for h in range(0, CAP)] + [f"{CAP}h+"])
@@ -281,7 +285,7 @@ def chart_days_per_participant(days, out):
            color=[ACCENT if d > 7 else SERIES for d in counts.index], zorder=3)
     for d, v in counts.items():
         ax.text(d, v, str(v), ha="center", va="bottom", fontsize=8, color=MUTED)
-    frame(ax, "Days recorded per participant, cleaned Wave 2 dataset",
+    frame(ax, f"Days recorded per participant, {LABEL}",
           "Days recorded", "Participants")
     ax.set_xticks(range(int(counts.index.min()), int(counts.index.max()) + 1))
     ax.set_ylim(0, counts.max() * 1.15)
@@ -305,7 +309,7 @@ def chart_modes(trips, out):
     for m, v in counts.items():
         ax.text(v + total * 0.006, m, f"{v:,}  ({v / total:.1%})",
                 va="center", fontsize=9, color=MUTED)
-    frame(ax, "Trips by mode of travel, cleaned Wave 2 dataset", "Trips", axis="x")
+    frame(ax, f"Trips by mode of travel, {LABEL}", "Trips", axis="x")
     ax.set_xlim(0, counts.max() * 1.16)
     car = int(counts.get("Auto Driver", 0) + counts.get("Auto Passenger", 0))
     headline(fig, f"{total:,} trips   ·   {car / total:.0%} by car   ·   "
@@ -331,11 +335,11 @@ def main() -> None:
         ["accessCode", "start_date", "_weekday"]].drop_duplicates()
 
     chart_start_times(trips, days,
-                      "Trip start times, cleaned Wave 2 dataset — all days",
+                      f"Trip start times, {LABEL} — all days",
                       f"{OUT_DIR}/start_times_cleaned.png")
     wd = trips[trips["_weekday"] < 5]
     chart_start_times(wd, days[days["_weekday"] < 5],
-                      "Trip start times, cleaned Wave 2 dataset — weekdays (Mon-Fri)",
+                      f"Trip start times, {LABEL} — weekdays (Mon-Fri)",
                       f"{OUT_DIR}/start_times_cleaned_weekday.png")
     chart_start_times_by_weekday(trips, days,
                                  f"{OUT_DIR}/start_times_by_weekday.png")
