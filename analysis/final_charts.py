@@ -24,6 +24,7 @@ the trips-per-person-day average (see `collapse_count`).
 
 from __future__ import annotations
 
+import os
 import re
 
 import matplotlib
@@ -32,8 +33,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-CLEANED = r"C:/Users/matin001/projects/TripReview/final/cleaned.xlsx"
-OUT_DIR = r"C:/Users/matin001/projects/TripReview/final"
+# The deliverable is filed by wave: the export workbooks under exports/<wave>/,
+# the charts drawn from them under distributions/<wave>/.
+FINAL = r"C:/Users/matin001/projects/TripReview/final"
+CLEANED = f"{FINAL}/exports/Wave 2/cleaned.xlsx"
+OUT_DIR = f"{FINAL}/distributions/Wave2"
 
 INK, MUTED, GRID = "#1a1a1a", "#5c5c5c", "#d8d8d8"
 SERIES, ACCENT, MISSING = "#2b6cb0", "#c05621", "#8a8a8a"
@@ -309,6 +313,7 @@ def chart_modes(trips, out):
 
 
 def main() -> None:
+    os.makedirs(OUT_DIR, exist_ok=True)
     df = pd.read_excel(CLEANED)
     tid = df["trip_id"].astype(str)
     df["_mode"] = df["mode_of_travel"].map(norm)
