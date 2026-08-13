@@ -29,7 +29,8 @@ from app import combine
 SESSIONS_ROOT = r"C:/Users/matin001/projects/TripReview/sessions"
 # filed by wave: workbooks under exports/<wave>/, the charts drawn from them
 # under distributions/<wave>/ (see analysis/final_charts.py)
-OUT_DIR = r"C:/Users/matin001/projects/TripReview/final/exports/Wave 2"
+WAVE = "Wave2"
+OUT_DIR = f"C:/Users/matin001/projects/TripReview/final/exports/{WAVE}"
 WAVE = (r"P:/UiTR/Shared Folder/1. Current Student/Matin/"
         r"4. Smartphone App Data Cleaning/Wave2 data with SD_coordinates_updated.xlsx")
 

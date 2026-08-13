@@ -34,10 +34,12 @@ import numpy as np
 import pandas as pd
 
 # The deliverable is filed by wave: the export workbooks under exports/<wave>/,
-# the charts drawn from them under distributions/<wave>/.
+# the charts drawn from them under distributions/<wave>/. Point WAVE at another
+# wave and everything else follows.
 FINAL = r"C:/Users/matin001/projects/TripReview/final"
-CLEANED = f"{FINAL}/exports/Wave 2/cleaned.xlsx"
-OUT_DIR = f"{FINAL}/distributions/Wave2"
+WAVE = "Wave2"
+CLEANED = f"{FINAL}/exports/{WAVE}/cleaned.xlsx"
+OUT_DIR = f"{FINAL}/distributions/{WAVE}"
 
 INK, MUTED, GRID = "#1a1a1a", "#5c5c5c", "#d8d8d8"
 SERIES, ACCENT, MISSING = "#2b6cb0", "#c05621", "#8a8a8a"
