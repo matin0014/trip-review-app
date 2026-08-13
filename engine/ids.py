@@ -68,4 +68,6 @@ def project_trip_id(
         return f"S{raw_row}"
     if kind == "zero_move":
         return f"Z{raw_row}"
+    if kind == "zero_move_removed":
+        return f"ZR{raw_row}"
     raise ValueError(f"unknown projection kind: {kind!r}")

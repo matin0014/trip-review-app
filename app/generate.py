@@ -528,7 +528,10 @@ def project_dataset(raw_path: str, accepted_ids: set, params=DEFAULT, res_map=No
         hand_deleted = {op["raw_row"] for op in day_ops
                         if op.get("type") == "manual_delete"}
         if day_rows and not present and not day_extras and not (day_rows & hand_deleted):
-            zero_move_days[day_key] = min(day_rows)
+            # every row of the day, not just the one the Z id is built from: the
+            # Do-file marks them all ZR<row> so a removed trip can be told apart
+            # from an ordinary removal by whether it belonged to a no-travel day
+            zero_move_days[day_key] = sorted(day_rows)
         extras += day_extras
         overrides.update(day_overrides)
         mode_overrides.update(day_mode_overrides)
@@ -574,7 +577,8 @@ def _zero_move_day_rows(df, zero_move_days: dict, cols: list) -> list:
     trip_id, and a fixed note."""
     rows = []
     n = len(df)
-    for _day_key, raw_row in sorted(zero_move_days.items(), key=lambda kv: kv[1]):
+    for _day_key, day_rows in sorted(zero_move_days.items(), key=lambda kv: kv[1]):
+        raw_row = day_rows[0]          # the day's lowest row carries the Z id
         i = raw_row - 1
         if not (0 <= i < n):
             continue
@@ -710,6 +714,11 @@ _STATUS = {"M": "merged", "R": "removed", "A": "added", "Q": "reviewed-gap", "S"
 
 
 def _status_of(trip_id: str) -> str:
+    # ZR<row> before Z<row>: a ZR row IS a removal (of a trip on a no-travel day),
+    # and a one-character prefix test would call it "zero-movement" and quietly
+    # drop it out of the removed counts
+    if trip_id[:2] == "ZR":
+        return "removed"
     return _STATUS.get(trip_id[:1], "kept")   # plain "143" keep ids fall through
 
 
@@ -746,10 +755,17 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
     _apply_time_overrides(df, time_overrides)  # hand-edited start/end times
     _apply_purpose_overrides(df, purpose_overrides)  # hand-edited trip purposes
 
+    # Rows belonging to a day the participant did not travel. Their removal has a
+    # different meaning from an ordinary one -- the whole day was GPS drift, not
+    # this particular trip -- so they are marked ZR<row> and can be filtered out
+    # of any analysis of what reviewers chose to remove.
+    zero_move_rows = {r for day in _zero_move_days.values() for r in day}
+
     def row_id(i):
         r = i + 1
         if r in removed:
-            return project_trip_id("remove", raw_row=r)  # R<row> — kept in the Do-file
+            kind = "zero_move_removed" if r in zero_move_rows else "remove"
+            return project_trip_id(kind, raw_row=r)      # ZR<row> / R<row>, Do-file only
         return tid.get(r, str(r))
 
     n = len(df)

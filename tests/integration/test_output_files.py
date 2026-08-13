@@ -518,8 +518,12 @@ def test_a_day_of_only_zero_move_trips_survives_as_one_Z_row(tmp_path, monkeypat
     for col in ("start_time", "end_time", "mode_of_travel", "purpose_of_travel",
                 "start_latitude", "end_latitude", "routes"):
         assert pd.isna(row[col]), col
-    # the individual trips are still audited as removed in the ledger
-    assert set(tids(dofile)) == {"R1", "R2"}
+    # The individual trips are still audited as removed in the ledger, but as
+    # ZR<row> rather than R<row>: their removal says the whole DAY was drift, not
+    # that this particular trip was junk, so an analysis of what reviewers chose
+    # to remove can filter them out.
+    assert set(tids(dofile)) == {"ZR1", "ZR2"}
+    assert set(dofile["status"]) == {"removed"}   # still a removal, not its own status
 
 
 def test_a_participant_whose_only_day_is_zero_move_is_kept_not_removed(tmp_path, monkeypatch):
