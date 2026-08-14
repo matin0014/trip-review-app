@@ -45,8 +45,21 @@ LABEL = f"cleaned {WAVE[:4]} {WAVE[4:]} dataset".replace("  ", " ")
 CLEANED = f"{FINAL}/exports/{WAVE}/cleaned.xlsx"
 OUT_DIR = f"{FINAL}/distributions/{WAVE}"
 
-INK, MUTED, GRID = "#1a1a1a", "#5c5c5c", "#d8d8d8"
-SERIES, ACCENT, MISSING = "#2b6cb0", "#c05621", "#8a8a8a"
+# One source for the ink and for the start-time smoother, shared with
+# `compare_waves.py` so a per-wave chart and the wave-vs-wave version of the same
+# chart cannot end up drawn to different rules.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from chartkit import (FAINT, GRID, INK, MISSING, MUTED, SURFACE, W2, W3,
+                      circular_kde, figure, headline, hour_axis, hour_of_day,
+                      save, style)
+
+# One wave to a run, so a single series colour -- but keyed to the wave, so a
+# wave 2 chart and a wave 3 chart put side by side use the same two colours as
+# the comparison charts do rather than reading as the same series twice.
+# ACCENT is whichever of the two the series is NOT: taking chartkit's ACCENT
+# verbatim would hand wave 2 pink on pink and silently erase every highlight.
+SERIES = W3 if WAVE.endswith("3") else W2
+ACCENT = W2 if SERIES == W3 else W3
 
 _INVISIBLE = re.compile(r"[\u200b\u200c\u200d\ufeff\xa0]")
 _TZ = re.compile(r"([+-]\d{2}:?\d{2})$")
@@ -78,24 +91,16 @@ def rounded_hour(hhmm):
     return (int(m.group(1)) + (1 if int(m.group(2)) >= 30 else 0)) % 24
 
 
-def headline(fig, text, y=0.045):
-    fig.text(0.075, y, text, fontsize=12.5, color=INK, va="bottom", weight="bold")
+def trips_per_hour(trips: pd.DataFrame, bw: float = 0.7):
+    """Smooth start-time curve in TRIPS per hour, not density.
 
-
-def frame(ax, title=None, xlabel=None, ylabel=None, axis="y"):
-    if title:
-        ax.set_title(title, fontsize=14, color=INK, pad=12, loc="left")
-    if xlabel:
-        ax.set_xlabel(xlabel, fontsize=10, color=MUTED)
-    if ylabel:
-        ax.set_ylabel(ylabel, fontsize=10, color=MUTED)
-    ax.grid(axis=axis, color=GRID, linewidth=0.8, zorder=1)
-    ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(GRID)
-    ax.tick_params(colors=MUTED, labelsize=9)
+    `circular_kde` returns a density that integrates to 1; multiplying by the
+    trip count puts the axis back in the unit the reader thinks in ("about 300
+    trips start around 5 pm") and keeps panels on a shared scale comparable.
+    """
+    hours = hour_of_day(trips["start_time"])
+    grid, dens = circular_kde(hours, bw=bw)
+    return grid, dens * hours.size, hours.size
 
 
 def collapse_count(day: pd.DataFrame) -> int:
@@ -158,87 +163,123 @@ def activity_records(trips: pd.DataFrame) -> pd.DataFrame:
 # --- charts ----------------------------------------------------------------
 
 def chart_start_times(trips, pdays, title, out):
-    counts = hour_bins(trips)
-    fig, ax = plt.subplots(figsize=(11, 6.0))
-    fig.subplots_adjust(top=0.90, bottom=0.15, left=0.075, right=0.98)
-    ax.plot(counts.index, counts.values, marker="o", markersize=5, linewidth=2,
-            color=SERIES, zorder=3)
-    ax.fill_between(counts.index, counts.values, alpha=0.10, color=SERIES, zorder=2)
-    frame(ax, title, "Hour of day", "Trips")
-    ax.set_xticks(range(24))
-    ax.set_xlim(-0.5, 23.5)
-    ax.set_ylim(0, counts.max() * 1.12)
+    """Smoothed, not binned. Hourly bars jag between adjacent hours purely because
+    of where the bin edges fall -- 08:29 and 08:31 land in different bars -- and
+    the exact minutes are in the data, so the curve can be built from them."""
+    grid, curve, n = trips_per_hour(trips)
+    fig, ax = figure(figsize=(12, 6.2))
+    fig.subplots_adjust(top=0.89, bottom=0.17, left=0.08, right=0.97)
+    ax.fill_between(grid, curve, color=SERIES, alpha=0.12, zorder=2)
+    ax.plot(grid, curve, color=SERIES, linewidth=3, zorder=3,
+            solid_capstyle="round")
+
+    # the two rush hours are what a reader looks for, so name them outright
+    am = slice(0, int(len(grid) * 11 / 24))
+    pm = slice(int(len(grid) * 11 / 24), len(grid))
+    for window, dy in ((am, 12), (pm, 12)):
+        i = window.start + int(np.argmax(curve[window]))
+        h = grid[i]
+        ax.plot([h], [curve[i]], "o", color=SERIES, markersize=6, zorder=4)
+        ax.annotate(f"{int(h):02d}:{int(round((h % 1) * 60)):02d}",
+                    xy=(h, curve[i]), xytext=(0, dy), textcoords="offset points",
+                    ha="center", fontsize=10.5, color=SERIES, weight="700")
+
+    style(ax, title, "Hour of day", "Trips starting per hour")
+    hour_axis(ax)
+    ax.set_ylim(0, curve.max() * 1.16)
     headline(fig, f"{len(trips):,} trips   ·   "
                   f"{adjusted_trips(trips) / len(pdays):.2f} trips per person per day")
-    fig.savefig(out, dpi=160, facecolor="white")
+    save(fig, out)
     plt.close(fig)
 
 
 def chart_start_times_by_weekday(trips, pdays, out):
     """Seven panels on ONE shared y-scale: the point is comparing days, which a
     per-panel scale would quietly defeat."""
-    fig, axes = plt.subplots(2, 4, figsize=(15, 7.4), sharey=True, sharex=True)
-    fig.subplots_adjust(top=0.86, bottom=0.13, left=0.05, right=0.98,
-                        hspace=0.35, wspace=0.12)
+    fig, axes = figure(2, 4, figsize=(15, 7.6), sharey=True, sharex=True)
+    fig.subplots_adjust(top=0.85, bottom=0.14, left=0.05, right=0.98,
+                        hspace=0.38, wspace=0.12)
+    # The whole-week curve is drawn faintly behind every panel, so each day is
+    # read against the week rather than against nothing.
+    grid, week, _n = trips_per_hour(trips)
+    week = week / 7.0
+    peak = week.max()
     for i, day in enumerate(WEEKDAYS):
         ax = axes[i // 4][i % 4]
         sub = trips[trips["_dayname"] == day]
-        counts = hour_bins(sub)
-        ax.plot(counts.index, counts.values, marker="o", markersize=3,
-                linewidth=1.6, color=SERIES, zorder=3)
-        ax.fill_between(counts.index, counts.values, alpha=0.10, color=SERIES, zorder=2)
-        frame(ax)
+        ax.plot(grid, week, color=FAINT, linewidth=1.2, zorder=2,
+                linestyle=(0, (3, 2)))
+        g, curve, _n = trips_per_hour(sub, bw=0.85)   # thinner slice, more smoothing
+        peak = max(peak, curve.max())
+        ax.fill_between(g, curve, color=SERIES, alpha=0.12, zorder=3)
+        ax.plot(g, curve, color=SERIES, linewidth=2.2, zorder=4,
+                solid_capstyle="round")
+        style(ax)
         ax.set_title(f"{day}   ({len(sub):,} trips)", fontsize=11, color=INK,
-                     loc="left", pad=6)
-        ax.set_xticks(range(0, 24, 6))
-        ax.set_xlim(-0.5, 23.5)
+                     loc="left", pad=6, weight="600")
+        ax.set_xticks(range(0, 25, 6))
+        ax.set_xlim(0, 24)
+    # `sharey` means whichever panel autoscaled LAST sets the limit for all seven,
+    # which clipped the busiest days; set the shared limit from the busiest curve
+    axes[0][0].set_ylim(0, peak * 1.10)
     axes[1][3].axis("off")
     # Thursday sits above the hidden 8th cell, so `sharex` leaves its column
     # with no hour labels anywhere -- put them back on the panel itself
     axes[0][3].tick_params(labelbottom=True)
     fig.suptitle(f"Trip start times by weekday, {LABEL}",
-                 fontsize=15, color=INK, x=0.05, ha="left", y=0.965)
+                 fontsize=15, color=INK, x=0.05, ha="left", y=0.965, weight="600")
     headline(fig, f"{len(trips):,} trips   ·   shared vertical scale, so panels compare "
-                  f"directly", y=0.04)
-    fig.savefig(out, dpi=160, facecolor="white")
+                  f"directly", y=0.045, x=0.05)
+    save(fig, out)
     plt.close(fig)
 
 
 def chart_activity_hist(recs, out):
-    CAP = 12
+    # Cut at 6 h rather than 12: beyond about three hours every bar is a flat
+    # sliver, so half the chart's width was spent on a few percent of the data
+    # while the sharp fall in the first hour -- the actual shape -- was squeezed.
+    CAP = 6
     hours = recs["hours"].values
     edges = np.arange(0, CAP + 0.5, 0.5)
     counts, _ = np.histogram(np.clip(hours, 0, CAP - 1e-9), bins=edges)
     over = int((hours >= CAP).sum())
-    fig, ax = plt.subplots(figsize=(11, 6.0))
-    fig.subplots_adjust(top=0.90, bottom=0.15, left=0.075, right=0.98)
-    ax.bar(edges[:-1] + 0.25, counts, width=0.44, color=SERIES, zorder=3)
+    fig, ax = figure(figsize=(12, 6.2))
+    fig.subplots_adjust(top=0.89, bottom=0.17, left=0.08, right=0.97)
+    ax.bar(edges[:-1] + 0.25, counts, width=0.42, color=SERIES, zorder=3)
     if over:
-        ax.bar([CAP + 0.25], [over], width=0.44, color=ACCENT, zorder=3)
-    frame(ax, f"Activity duration between consecutive trips, {LABEL}",
+        ax.bar([CAP + 0.25], [over], width=0.42, color=ACCENT, zorder=3)
+        ax.annotate(f"{over:,}", xy=(CAP + 0.25, over), xytext=(0, 6),
+                    textcoords="offset points", ha="center", fontsize=9.5,
+                    color=ACCENT, weight="600")
+    med = float(np.median(hours))
+    ax.axvline(med, color=INK, linewidth=1.3, linestyle=(0, (4, 3)), zorder=4)
+    ax.annotate(f"median {med * 60:.0f} min", xy=(med, counts.max() * 0.88),
+                xytext=(9, 0), textcoords="offset points", fontsize=10.5,
+                color=INK, weight="600")
+    style(ax, f"Activity duration between consecutive trips, {LABEL}",
           "Hours (30-minute bins)", "Activities")
     ax.set_xticks(list(range(0, CAP)) + [CAP + 0.25])
     ax.set_xticklabels([str(h) for h in range(0, CAP)] + [f"{CAP}h+"])
-    ax.set_xlim(-0.3, CAP + 0.8)
+    ax.set_xlim(-0.35, CAP + 0.85)
     headline(fig, f"{len(hours):,} activities   ·   median "
-                  f"{np.median(hours):.1f} h   ·   mean {hours.mean():.1f} h")
-    fig.savefig(out, dpi=160, facecolor="white")
+                  f"{med * 60:.0f} min   ·   {(hours < 1).mean():.0%} under an hour")
+    save(fig, out)
     plt.close(fig)
 
 
 def _purpose_bars(series, counts, title, xlabel, out, headline_text):
     order = series.sort_values(ascending=True)
-    fig, ax = plt.subplots(figsize=(11, 7.4))
+    fig, ax = figure(figsize=(11, 7.4))
     fig.subplots_adjust(top=0.91, bottom=0.13, left=0.30, right=0.97)
     colors = [MISSING if p == "Not recorded" else SERIES for p in order.index]
     ax.barh(order.index, order.values, height=0.68, color=colors, zorder=3)
     for p, v in order.items():
         ax.text(v + order.max() * 0.012, p, f"{v:.1f} h   (n={counts[p]:,})",
                 va="center", fontsize=9, color=MUTED)
-    frame(ax, title, xlabel, axis="x")
+    style(ax, title, xlabel, axis="x")
     ax.set_xlim(0, order.max() * 1.28)
     headline(fig, headline_text)
-    fig.savefig(out, dpi=160, facecolor="white")
+    save(fig, out)
     plt.close(fig)
 
 
@@ -272,20 +313,20 @@ def chart_activity_by_purpose(recs, out_episode, out_perday):
     _purpose_bars(daily, n_days,
                   "Average hours per day spent on each activity, by purpose",
                   "Hours per day on which the activity occurred", out_perday,
-                  f"{n_person_days:,} person-days with at least one activity   ·   "
-                  f"each purpose averaged only over days it occurred")
+                  f"{n_person_days:,} person-days   ·   each purpose averaged only "
+                  f"over the days it occurred")
 
 
 def chart_days_per_participant(days, out):
     per_person = days.groupby("accessCode").size()
     counts = per_person.value_counts().sort_index()
-    fig, ax = plt.subplots(figsize=(11, 6.0))
+    fig, ax = figure(figsize=(11, 6.0))
     fig.subplots_adjust(top=0.90, bottom=0.15, left=0.075, right=0.98)
     ax.bar(counts.index, counts.values, width=0.72,
            color=[ACCENT if d > 7 else SERIES for d in counts.index], zorder=3)
     for d, v in counts.items():
         ax.text(d, v, str(v), ha="center", va="bottom", fontsize=8, color=MUTED)
-    frame(ax, f"Days recorded per participant, {LABEL}",
+    style(ax, f"Days recorded per participant, {LABEL}",
           "Days recorded", "Participants")
     ax.set_xticks(range(int(counts.index.min()), int(counts.index.max()) + 1))
     ax.set_ylim(0, counts.max() * 1.15)
@@ -293,7 +334,7 @@ def chart_days_per_participant(days, out):
     headline(fig, f"{per_person.mean():.2f} days per participant   ·   {over7} of "
                   f"{len(per_person)} ({over7 / len(per_person):.0%}) recorded more "
                   f"than 7 days")
-    fig.savefig(out, dpi=160, facecolor="white")
+    save(fig, out)
     plt.close(fig)
 
 
@@ -301,7 +342,7 @@ def chart_modes(trips, out):
     modes = trips["_mode"].replace("", "Not recorded")
     counts = modes.value_counts().sort_values(ascending=True)
     total = int(counts.sum())
-    fig, ax = plt.subplots(figsize=(11, 7.4))
+    fig, ax = figure(figsize=(11, 7.4))
     fig.subplots_adjust(top=0.91, bottom=0.13, left=0.18, right=0.97)
     ax.barh(counts.index, counts.values, height=0.68,
             color=[MISSING if m in ("Unknown", "Not recorded") else SERIES
@@ -309,12 +350,12 @@ def chart_modes(trips, out):
     for m, v in counts.items():
         ax.text(v + total * 0.006, m, f"{v:,}  ({v / total:.1%})",
                 va="center", fontsize=9, color=MUTED)
-    frame(ax, f"Trips by mode of travel, {LABEL}", "Trips", axis="x")
+    style(ax, f"Trips by mode of travel, {LABEL}", "Trips", axis="x")
     ax.set_xlim(0, counts.max() * 1.16)
     car = int(counts.get("Auto Driver", 0) + counts.get("Auto Passenger", 0))
     headline(fig, f"{total:,} trips   ·   {car / total:.0%} by car   ·   "
                   f"{counts.get('Walk', 0) / total:.0%} on foot")
-    fig.savefig(out, dpi=160, facecolor="white")
+    save(fig, out)
     plt.close(fig)
 
 
@@ -368,7 +409,7 @@ def main() -> None:
            .sort_values("mean", ascending=False))
     for p, r in pd_.iterrows():
         print(f"  {p:<45} {r['mean']:5.2f} h  (n={int(r['size']):,} days)")
-    print("\nwrote 7 PNGs to", OUT_DIR)
+    print("\nwrote 8 PNGs to", OUT_DIR)
 
 
 if __name__ == "__main__":
