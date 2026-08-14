@@ -304,6 +304,62 @@ def _stub_row(stub) -> dict:
     }
 
 
+# Never inferred, whatever the data looks like: `wave_row` identifies ONE source
+# row, so a synthesized trip genuinely has none and inventing one would break the
+# wave_row join the combine relies on. The rest are the export's own columns.
+_NEVER_BACKFILL = {"wave_row", "trip_id", "comment", "status", "flags", "source_split"}
+
+
+def _backfill_person_columns(df):
+    """Fill the participant's own details onto rows that have none.
+
+    A synthesized row -- an added trip, a split's B piece, a reviewed-gap marker --
+    is built from a `Trip` in memory, so it carries the journey but none of the
+    workbook's columns: no region, no age, no employment. That is 8% of a wave's
+    rows silently dropping out of any demographic breakdown, and added trips are
+    the worst of it because an `A` row is the ONLY row for that journey (a split's
+    A piece still carries them, so its B piece has a populated neighbour).
+
+    Which columns are safe is read from the data rather than hardcoded, so this
+    keeps working when a wave changes its schema: a column is a person-level
+    constant only if every participant who has a value has exactly ONE value.
+    Anything varying within a participant (times, coordinates, purpose, and
+    `wave_row` itself) is row-level and left alone.
+    """
+    if "accessCode" not in df.columns or df.empty:
+        return df
+    for col in df.columns:
+        if col in _NEVER_BACKFILL:
+            continue
+        known = df[df[col].notna() & df["accessCode"].notna()]
+        if known.empty:
+            continue
+        if (known.groupby("accessCode")[col].nunique() > 1).any():
+            continue  # varies within a participant -> row-level, not theirs to inherit
+        blank = df[col].isna() & df["accessCode"].notna()
+        if blank.any():
+            df.loc[blank, col] = df.loc[blank, "accessCode"].map(
+                known.groupby("accessCode")[col].first())
+    return df
+
+
+def _fill_weekdays(df):
+    """Derive a missing weekday from the row's own date.
+
+    The weekday is row-level, so it cannot be inherited from another row the way
+    a participant's age can -- but it is a pure function of the date, which every
+    synthesized row does carry."""
+    import pandas as pd
+
+    for date_col, wd_col in (("start_date", "start_weekday"), ("end_date", "end_weekday")):
+        if date_col in df.columns and wd_col in df.columns:
+            blank = df[wd_col].isna() & df[date_col].notna()
+            if blank.any():
+                df.loc[blank, wd_col] = pd.to_datetime(
+                    df.loc[blank, date_col], errors="coerce").dt.day_name()
+    return df
+
+
 def _set_cell(df, i: int, col: str, v) -> None:
     """Assign ``df.at[i, col] = v``, first widening the column to ``object`` when a
     string is written into a non-object (e.g. all-NaN float64) column. Without this
@@ -666,6 +722,9 @@ def build_cleaned_df(raw_path: str, accepted_ids: set, params=DEFAULT,
         cleaned = pd.concat([cleaned, pd.DataFrame(added, columns=cols)], ignore_index=True)
     if extras or zm_rows:
         cleaned = _sort_chronologically(cleaned)  # slot A/Q/split/zero-move rows into place
+    # synthesized rows arrive with only their journey filled in; give them the
+    # participant's own details so they are not invisible to any grouping
+    cleaned = _fill_weekdays(_backfill_person_columns(cleaned))
     return cleaned
 
 
@@ -792,6 +851,9 @@ def build_dofile_df(raw_path: str, accepted_ids: set, res_map: dict, params=DEFA
             added.append(row)
         df = pd.concat([df, pd.DataFrame(added, columns=cols)], ignore_index=True)
         df = _sort_chronologically(df)  # slot A/Q/split rows into their real spot
+    # same as the cleaned file: the ledger's synthesized rows get the participant's
+    # details too, so a Do-file row is never less identifiable than a cleaned one
+    df = _fill_weekdays(_backfill_person_columns(df))
     return df
 
 
