@@ -98,13 +98,20 @@ def activity_records(t: pd.DataFrame) -> pd.DataFrame:
 
 # --- charts ----------------------------------------------------------------
 
-def chart_start_times(data: dict, out: str, title: str, note: str) -> None:
+def chart_start_times(data: dict, out: str, title: str, note: str,
+                      counts: bool = False) -> None:
+    """`counts=True` puts trips-per-hour on the y-axis instead of the default
+    share/density. A raw count lets wave 3's larger trip volume show through --
+    fine when that size difference IS part of what's being shown, but everywhere
+    else in this module the axis is a share/average precisely to strip that out,
+    so this is opt-in rather than the default."""
     fig, ax = figure(figsize=(12, 6.4))
     fig.subplots_adjust(top=0.86, bottom=0.15, left=0.08, right=0.97)
     curves = {}
     for wave, t in data.items():
-        grid, dens = circular_kde(hour_of_day(t["start_time"]))
-        curves[wave] = (grid, dens)
+        hours = hour_of_day(t["start_time"])
+        grid, dens = circular_kde(hours)
+        curves[wave] = (grid, dens * hours.size if counts else dens)
 
     # No overlapping translucent fills: two of them blend into a third colour
     # that reads as a category of its own, and the overlap is most of the day
@@ -119,15 +126,22 @@ def chart_start_times(data: dict, out: str, title: str, note: str) -> None:
                 solid_capstyle="round")
 
     # Label each curve where they are FURTHEST apart, not at their peaks -- the
-    # peaks are minutes apart, so labels there would sit on top of each other
+    # peaks are minutes apart, so labels there would sit on top of each other.
+    # The offset follows whichever curve is actually higher at that point rather
+    # than a hardcoded wave -> above/below mapping: in the density chart wave 2
+    # is always the top curve at its separation point, but in the counts chart
+    # wave 3 (more trips) is, and a fixed mapping would print its label ON its
+    # own line instead of clear of it.
     sep = int(np.argmax(np.abs(d2 - d3)))
+    top_wave = "Wave 2" if d2[sep] >= d3[sep] else "Wave 3"
     for wave, (grid, dens) in curves.items():
         ax.annotate(wave, xy=(grid[sep], dens[sep]),
-                    xytext=(0, 11 if wave == "Wave 2" else -20),
+                    xytext=(0, 11 if wave == top_wave else -20),
                     textcoords="offset points", ha="center", fontsize=11.5,
                     color=COLOR[wave], weight="700")
 
-    style(ax, title, "Hour of day", "Share of trips (density per hour)")
+    style(ax, title, "Hour of day",
+          "Trips starting per hour" if counts else "Share of trips (density per hour)")
     hour_axis(ax)
     ax.set_ylim(bottom=0)
     ax.legend(frameon=False, loc="upper left", fontsize=10.5, labelcolor=MUTED)
@@ -265,7 +279,7 @@ def main() -> None:
         weekdays, f"{OUT_DIR}/compare_start_times_weekday.png",
         "When people travel on a weekday (Mon-Fri)",
         "Stripped of weekends, both waves show the morning commute peak the "
-        "all-days view flattens")
+        "all-days view flattens", counts=True)
     chart_purpose_per_day(data, f"{OUT_DIR}/compare_activity_by_purpose_per_day.png")
     chart_mode_share(data, f"{OUT_DIR}/compare_mode_share.png")
     print(f"\nwrote 4 comparison PNGs to {OUT_DIR}")
