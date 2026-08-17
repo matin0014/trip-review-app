@@ -123,7 +123,7 @@ function renderDayActions(entry){
  bar.style.display = '';
  if(entry.excluded){            // removed (auto out-of-region OR hand-deleted) -> offer recover
   bar.className = 'region-bar removed';
-  const lead = entry.out_of_region ? 'Leaves the study area — ' : '';
+  const lead = entry.out_of_region ? 'Leaves the study area: ' : '';
   bar.innerHTML = `<span class="region-msg">⊘ ${lead}<b>removed</b> from the export.</span>`+
                   '<button id="bRecoverDay" class="act apply">Recover day</button>';
   $('bRecoverDay').onclick = ()=>setDayIncluded(entry.key, true);
@@ -161,7 +161,7 @@ export function fillDays(){
  if(!daySel.options.length){            // nothing matches the current filter for this person
   S.cur.key = null; S.cur.data = null;
   const msg = S.dayFilter==='removed' ? 'no removed days for this participant'
-            : 'all days removed — switch the filter to “Removed days” to recover';
+            : 'all days removed, switch the filter to “Removed days” to recover';
   $('crumb').innerHTML = `<span class="mono">${S.cur.person}</span><span class="sep">/</span>`+
     `<span class="muted">${msg}</span>`;
   renderDayActions(null);

@@ -376,11 +376,11 @@ def main() -> None:
         ["accessCode", "start_date", "_weekday"]].drop_duplicates()
 
     chart_start_times(trips, days,
-                      f"Trip start times, {LABEL} — all days",
+                      f"Trip start times, {LABEL}, all days",
                       f"{OUT_DIR}/start_times_cleaned.png")
     wd = trips[trips["_weekday"] < 5]
     chart_start_times(wd, days[days["_weekday"] < 5],
-                      f"Trip start times, {LABEL} — weekdays (Mon-Fri)",
+                      f"Trip start times, {LABEL}, weekdays (Mon-Fri)",
                       f"{OUT_DIR}/start_times_cleaned_weekday.png")
     chart_start_times_by_weekday(trips, days,
                                  f"{OUT_DIR}/start_times_by_weekday.png")
