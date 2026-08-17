@@ -179,6 +179,16 @@ $('bGenerate').onclick = async ()=>{
  }
  window.location.href = `/api/${window.SID}/generate`;
 };
+$('bDistributions').onclick = async ()=>{
+ // Same desktop-window download limitation as bGenerate above, same fix.
+ if(window.pywebview && window.pywebview.api){
+  const r = await window.pywebview.api.save_distributions(window.SID);
+  if(r.ok) alert(`Saved to ${r.path}`);
+  else if(!r.cancelled) alert(`Distributions PDF failed: ${r.error}`);
+  return;
+ }
+ window.location.href = `/api/${window.SID}/distributions`;
+};
 $('bMerge').onclick = ()=>{
  if(S.addMode){S.addMode=false; S.addPts=[]; $('addBar').style.display='none';}
  exitReposition();

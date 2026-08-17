@@ -66,6 +66,11 @@
   <h2>Resume a session</h2>
   <div id="recent"></div>
  </div>
+ <div class="card">
+  <h2>Generate distributions</h2>
+  <input type="file" id="distFile" accept=".xlsx" style="display:block;margin-bottom:10px">
+  <button id="distGo" type="button" disabled>Generate PDF</button>
+ </div>
 </div>
 
 <div id="dupModal" class="modal" style="display:none">
@@ -165,6 +170,37 @@
   const row=document.querySelector(`.recent-row[data-sid="${delSid}"]`);
   if(row) row.remove();
   if(!$('recent').children.length) $('recentCard').style.display='none';
+ };
+
+ // --- distributions PDF from an already-cleaned file (no session) ---
+ const distFile=$('distFile'), distGo=$('distGo');
+ distFile.onchange=()=>{distGo.disabled=!distFile.files[0];};
+ distGo.onclick=async ()=>{
+  if(!distFile.files[0]) return;
+  distGo.disabled=true; distGo.textContent='Building…';
+  const fd=new FormData(); fd.append('file', distFile.files[0]);
+  try{
+   // Same desktop-window download limitation as the main upload flow doesn't
+   // hit (that one navigates to a new page instead of downloading a file) --
+   // this one produces a file, so it needs the same pywebview Save As path
+   // the session-side "Generate export"/"Distributions PDF" buttons use.
+   if(window.pywebview && window.pywebview.api){
+    const res=await fetch('/api/distributions/from_file/build',{method:'POST',body:fd});
+    if(!res.ok){alert(await res.text()); return;}
+    const {path}=await res.json();
+    const r=await window.pywebview.api.save_distributions_from_path(path);
+    if(r.ok) alert(`Saved to ${r.path}`);
+    else if(!r.cancelled) alert(`Save failed: ${r.error}`);
+   } else {
+    const res=await fetch('/api/distributions/from_file',{method:'POST',body:fd});
+    if(!res.ok){alert(await res.text()); return;}
+    const blob=await res.blob();
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='trip_review_distributions.pdf'; a.click();
+   }
+  } finally {
+   distGo.disabled=false; distGo.textContent='Generate PDF';
+  }
  };
 </script>
 </body></html>

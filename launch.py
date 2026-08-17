@@ -24,9 +24,11 @@ rather than trying to tell the two apart from the exception alone.
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -108,6 +110,50 @@ class Api:
         dest = result[0] if isinstance(result, (list, tuple)) else result
         shutil.copyfile(zip_path, dest)
         return {"ok": True, "path": dest}
+
+    def save_distributions(self, sid: str) -> dict:
+        """Session case, mirrors save_export exactly: generate server-side first
+        (the CURRENT live-cleaned state), then hand the file to the user via the
+        same native Save As dialog."""
+        try:
+            from app import distributions
+            tmp_dir = tempfile.mkdtemp(prefix="triprev_dist_")
+            out = os.path.join(tmp_dir, "distributions.pdf")
+            distributions.build_distributions_pdf_for_session(sid, out)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+        result = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename="trip_review_distributions.pdf",
+            file_types=("PDF files (*.pdf)",))
+        dest = None
+        if result:
+            dest = result[0] if isinstance(result, (list, tuple)) else result
+            shutil.copyfile(out, dest)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return {"ok": True, "path": dest} if dest else {"ok": False, "cancelled": True}
+
+    def save_distributions_from_path(self, server_pdf_path: str) -> dict:
+        """Standalone case (no session), step 2: the page already POSTed the
+        loaded file to /api/distributions/from_file/build and built the PDF
+        server-side, since a raw File object can't cross this JS bridge -- this
+        call only does the Save As dialog for the path that step handed back.
+        The temp-dir prefix check is defense against a stray call, not a real
+        trust boundary (this is a local single-user app)."""
+        real = os.path.realpath(server_pdf_path)
+        if (not real.startswith(os.path.realpath(tempfile.gettempdir()))
+                or not os.path.isfile(real)):
+            return {"ok": False, "error": "invalid or expired path"}
+
+        result = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename="trip_review_distributions.pdf",
+            file_types=("PDF files (*.pdf)",))
+        dest = None
+        if result:
+            dest = result[0] if isinstance(result, (list, tuple)) else result
+            shutil.copyfile(real, dest)
+        shutil.rmtree(os.path.dirname(real), ignore_errors=True)  # cleanup either way
+        return {"ok": True, "path": dest} if dest else {"ok": False, "cancelled": True}
 
 
 def _wait_until_listening(port: int, timeout: float = 10.0) -> None:
