@@ -4,13 +4,20 @@ Responsibility: TP (accept) / FP (waive) counts -> precision, for the four
 scored detectors (zero_move, fragment, missing_trip, mode_change via its
 apply-resolution "merge"), bucketing `origin=cascade` separately from
 `origin=ingest`. No recall/TN/FN.
+
+Scores from `decisions.all_raised_flags`, not `decisions.fixpoint`'s own
+returned flags: a waived flag whose trip was later removed some OTHER way (a
+manual delete, the bulk no-purpose delete, ...) still counts here, where
+`fixpoint()` itself would have silently dropped it (see that function's
+docstring). Without this, a waived-then-deleted flag vanishes from the count
+instead of scoring as the false positive the reviewer judged it to be.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 
-from app.decisions import APPLY_RESOLUTIONS, WAIVE_RESOLUTIONS, fixpoint, manual_ops, resolutions
+from app.decisions import APPLY_RESOLUTIONS, WAIVE_RESOLUTIONS, all_raised_flags, manual_ops, resolutions
 from engine.classify import group_person_days
 from engine.loader import load_trips
 from engine.params import DEFAULT
@@ -25,7 +32,7 @@ SCORED_TYPES = frozenset({"zero_move", "fragment", "missing_trip", "mode_change"
 def precision_table(raw_path: str, events: list, params=DEFAULT) -> dict:
     """``{(flag_type, origin): {"tp": n, "fp": n, "precision": float | None}}``
 
-    Replays every person-day's fixpoint to see each scored flag's resolution,
+    Replays every person-day's cascade to see each scored flag's resolution,
     tallying accept/merge as TP and waive as FP. Flags never decided (pending)
     don't count either way. `precision` is ``None`` when tp+fp == 0.
     """
@@ -37,7 +44,7 @@ def precision_table(raw_path: str, events: list, params=DEFAULT) -> dict:
     for (person, date), day_trips in group_person_days(load_trips(raw_path)).items():
         day_key = f"{person}|{date}"
         day_ops = [op for op in ops if op.get("day_key") == day_key]
-        _live, surfaced = fixpoint(day_trips, accepted, ops=day_ops, params=params)
+        surfaced = all_raised_flags(day_trips, accepted, ops=day_ops, params=params)
         for f in surfaced:
             if f.flag_type not in SCORED_TYPES:
                 continue

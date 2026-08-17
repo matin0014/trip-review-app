@@ -159,19 +159,14 @@ def replay(events: list) -> set:
     return {fid for fid, res in resolutions(events).items() if res in APPLY_RESOLUTIONS}
 
 
-def fixpoint(day_trips: list, accepted_ids: set, ops: list = None,
+def _cascade(day_trips: list, accepted_ids: set, ops: list = None,
              params=DEFAULT) -> tuple:
-    """Live state for ONE person-day: apply accepted flags and re-classify until
-    the trip set stops changing.
+    """The cascade loop shared by `fixpoint()` and `all_raised_flags()`.
 
-    ``ops`` is the ordered list of currently-active ``manual_*`` events for this
-    day. They are applied BEFORE the cascade loop so the engine re-classifies the
-    manually-edited trip set. Manual deletes and merges are handled; split/add
-    are silently skipped until later steps implement them.
-
-    Returns ``(live_trips, surfaced_flags)``: the converged projected trips, and
-    the flags worth showing (pending cascade-born + accepted/consumed originals).
-    """
+    Returns ``(trips, flags, surfaced)``: the converged projected trips, the
+    LAST round's flags, and EVERY flag ever raised across every round keyed by
+    flag_id (a flag stays in `surfaced` even once its trip stops existing in a
+    later round, whatever the reason)."""
     trips = list(day_trips)
 
     surfaced: dict = {}
@@ -189,10 +184,49 @@ def fixpoint(day_trips: list, accepted_ids: set, ops: list = None,
             break
         trips = projected
 
+    return trips, flags, surfaced
+
+
+def fixpoint(day_trips: list, accepted_ids: set, ops: list = None,
+             params=DEFAULT) -> tuple:
+    """Live state for ONE person-day: apply accepted flags and re-classify until
+    the trip set stops changing.
+
+    ``ops`` is the ordered list of currently-active ``manual_*`` events for this
+    day. They are applied BEFORE the cascade loop so the engine re-classifies the
+    manually-edited trip set. Manual deletes and merges are handled; split/add
+    are silently skipped until later steps implement them.
+
+    Returns ``(live_trips, surfaced_flags)``: the converged projected trips, and
+    the flags worth showing (pending cascade-born + accepted/consumed originals).
+    """
+    trips, flags, surfaced = _cascade(day_trips, accepted_ids, ops, params)
     final_ids = {f.flag_id for f in flags}
     consumed = [f for f in surfaced.values()
                 if f.flag_id in accepted_ids and f.flag_id not in final_ids]
     return trips, flags + consumed
+
+
+def all_raised_flags(day_trips: list, accepted_ids: set, ops: list = None,
+                     params=DEFAULT) -> list:
+    """Every flag ever raised for one person-day's cascade, one per flag_id --
+    for SCORING (precision metrics), not for display.
+
+    `fixpoint()`'s own returned flag list drops a flag once its trip stops
+    existing, UNLESS that flag was itself accepted (the `consumed` rescue: an
+    accepted zero_move, for instance, removes its own trip, so `consumed`
+    specifically catches "vanished via its own accepted effect"). A WAIVED flag
+    has no such rescue: if its trip is later removed some other way (a manual
+    delete, the bulk no-purpose delete, ...) it silently drops out of
+    `fixpoint()`'s return the moment that happens, which would undercount it as
+    a false positive -- the reviewer DID judge it, the bookkeeping just lost the
+    judgment. This returns the full `surfaced` set instead, where a flag is
+    never dropped just because its trip later disappeared for an unrelated
+    reason, so `app.metrics.precision_table` scores accept/waive consistently
+    regardless of what happened to the trip afterward.
+    """
+    _trips, _flags, surfaced = _cascade(day_trips, accepted_ids, ops, params)
+    return list(surfaced.values())
 
 
 def _signature(trips: list) -> tuple:
