@@ -76,8 +76,8 @@ gap distance < 200m?
 |---|---|
 | Fragment | Two logged trips that are really one continuous journey. |
 | Mode change | Looks mergeable, but the speed before/after don't match, should be examined needs a human to confirm. |
-| Missing trip | A modest gap of unexplained time — probably a short unlogged trip. |
-| Missing activity | A large gap of unexplained time — probably an unlogged activity. |
+| Missing trip | A modest gap of unexplained time probably a short unrecorded trip. |
+| Missing activity | A large gap of unexplained time probably a significant activity that occurred in between. |
 | Zero move | The "trip" never actually went anywhere. |
 
 ## API
