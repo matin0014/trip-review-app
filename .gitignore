@@ -32,8 +32,11 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Personal Claude Code overrides (model choice etc.; not team-shared)
-.claude/settings.local.json
+# Claude Code workspace config: personal overrides (model choice etc.) and
+# local agent definitions. Not team-shared. Widened from the former
+# `.claude/settings.local.json` rule, which left `.claude/agents/` untracked
+# and showing up in every `git status`.
+.claude/
 
 # Excel lock files
 ~$*.xlsx
