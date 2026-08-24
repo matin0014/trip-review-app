@@ -19,18 +19,25 @@ from __future__ import annotations
 import numpy as np
 
 # --- ink -------------------------------------------------------------------
-# Dark surface. Every text, grid and spine colour is set explicitly against it:
-# matplotlib's own defaults are all near-black and would vanish here, so an
-# unset colour is not a small style slip but an invisible element.
-SURFACE = "#0f1117"
-INK, MUTED, FAINT, GRID = "#f2f5f9", "#9aa4b8", "#5b6478", "#252b39"
+# White surface. Every text, grid and spine colour is set explicitly against it:
+# matplotlib's own defaults assume a white ground too, but leaving any of these
+# implicit means a future dark-mode pass silently breaks them, so they are all
+# named here rather than left to the default.
+SURFACE = "#ffffff"
+INK, MUTED, FAINT, GRID = "#12151b", "#5b6478", "#c3c8d3", "#e5e7eb"
 
-# Light pink and neon green, on a dark ground so both read as light marks.
-# Pink against green is the pairing red-green colour blindness collapses, so
-# every comparison chart carries a legend AND labels each series directly:
-# identity here is never carried by colour alone.
-W2, W3 = "#ff9ecb", "#39ff14"
-SERIES, ACCENT, MISSING = "#39ff14", "#ff9ecb", "#6b7488"
+# Red / green: one wave, one colour, everywhere that wave appears (a per-wave
+# chart and the wave-vs-wave comparison never disagree on which colour is which
+# wave). Red against green is exactly the pairing red-green colour blindness
+# collapses, so every comparison chart carries a legend AND labels each series
+# directly: identity here is never carried by colour alone.
+W2, W3 = "#dc2626", "#16a34a"
+# A highlight colour for "this bar is the outlier", used WITHIN a single-wave
+# chart (e.g. the >7-day tail in `days_per_participant`). Deliberately not one
+# of W2/W3: reusing another wave's colour there would read as a cross-wave
+# comparison that isn't actually being made.
+AMBER = "#d97706"
+SERIES, ACCENT, MISSING = "#16a34a", "#d97706", "#8b93a7"
 
 
 def figure(*args, **kwargs):

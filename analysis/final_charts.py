@@ -49,22 +49,21 @@ OUT_DIR = f"{FINAL}/distributions/{WAVE}"
 # `compare_waves.py` so a per-wave chart and the wave-vs-wave version of the same
 # chart cannot end up drawn to different rules.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from chartkit import (FAINT, GRID, INK, MISSING, MUTED, SURFACE, W2, W3,
+from chartkit import (AMBER, FAINT, GRID, INK, MISSING, MUTED, SURFACE, W2, W3,
                       circular_kde, figure, headline, hour_axis, hour_of_day,
                       save, style)
 
-# One wave to a run, so a single series colour -- but keyed to the wave, so a
-# wave 2 chart and a wave 3 chart put side by side use the same two colours as
-# the comparison charts do rather than reading as the same series twice.
-# ACCENT is whichever of the two the series is NOT: taking chartkit's ACCENT
-# verbatim would hand wave 2 pink on pink and silently erase every highlight.
-SERIES = W3 if WAVE.endswith("3") else W2
-ACCENT = W2 if SERIES == W3 else W3
+# One wave to a run, so a single series colour -- but keyed to the wave, so this
+# chart and the wave-vs-wave comparison never disagree on which colour is which
+# wave. ACCENT highlights an outlier WITHIN this one wave's chart (e.g. the
+# >7-day tail in `days_per_participant`); it is never another wave's colour,
+# which would read as a comparison this chart isn't making.
+SERIES = {"Wave2": W2, "Wave3": W3}[WAVE]
+ACCENT = AMBER
 
 _INVISIBLE = re.compile(r"[\u200b\u200c\u200d\ufeff\xa0]")
 _TZ = re.compile(r"([+-]\d{2}:?\d{2})$")
 
-TRANSIT_MODES = {"Transit", "Transit Bus", "SkyTrain", "SeaBus"}
 STOP_PURPOSE = "Travel to transit stop"
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday"]
@@ -105,22 +104,23 @@ def trips_per_hour(trips: pd.DataFrame, bw: float = 0.7):
 
 def collapse_count(day: pd.DataFrame) -> int:
     """Trips on one person-day with one JOURNEY counted once: consecutive
-    shopping; a Walk for Recreation then a Walk Returning Home; a trip to a
-    transit stop then the transit ride."""
+    shopping; a Walk for Recreation then a Walk Returning Home. A trip whose
+    purpose is travel to a transit stop is not counted at all: it exists only
+    to reach the transit ride that follows, not as a trip in its own right."""
     rows = day.to_dict("records")
     n = i = 0
     while i < len(rows):
         cur = rows[i]
         nxt = rows[i + 1] if i + 1 < len(rows) else None
+        if cur["_purpose"] == STOP_PURPOSE:
+            i += 1
+            continue
         if cur["_purpose"] == "Shopping":
             while i + 1 < len(rows) and rows[i + 1]["_purpose"] == "Shopping":
                 i += 1
         elif (cur["_mode"] == "Walk" and cur["_purpose"] == "Recreation"
               and nxt is not None and nxt["_mode"] == "Walk"
               and nxt["_purpose"] == "Returning Home"):
-            i += 1
-        elif (cur["_purpose"] == STOP_PURPOSE
-              and nxt is not None and nxt["_mode"] in TRANSIT_MODES):
             i += 1
         n += 1
         i += 1
@@ -131,6 +131,20 @@ def adjusted_trips(trips: pd.DataFrame) -> int:
     ordered = trips.sort_values(["accessCode", "start_date", "start_time"])
     return int(sum(collapse_count(d) for _k, d in
                    ordered.groupby(["accessCode", "start_date"], sort=False)))
+
+
+def person_day_ratio_excluding_heavy_weekends(trips, days, threshold=10):
+    """Trips-per-person-per-day with any weekend day (Sat/Sun) that logged
+    `threshold`+ trips dropped from both the numerator and the denominator --
+    that many trips in a single day reads as a logging artefact, not travel."""
+    weekend = trips[trips["_weekday"] >= 5]
+    counts = weekend.groupby(["accessCode", "start_date"]).size()
+    heavy = set(counts[counts >= threshold].index)
+    trip_keys = list(zip(trips["accessCode"], trips["start_date"]))
+    kept_trips = trips[[k not in heavy for k in trip_keys]]
+    day_keys = list(zip(days["accessCode"], days["start_date"]))
+    kept_days = days[[k not in heavy for k in day_keys]]
+    return adjusted_trips(kept_trips) / len(kept_days)
 
 
 def hour_bins(trips: pd.DataFrame) -> pd.Series:
@@ -162,10 +176,14 @@ def activity_records(trips: pd.DataFrame) -> pd.DataFrame:
 
 # --- charts ----------------------------------------------------------------
 
-def chart_start_times(trips, pdays, title, out):
+def chart_start_times(trips, pdays, title, out, ratio=None):
     """Smoothed, not binned. Hourly bars jag between adjacent hours purely because
     of where the bin edges fall -- 08:29 and 08:31 land in different bars -- and
-    the exact minutes are in the data, so the curve can be built from them."""
+    the exact minutes are in the data, so the curve can be built from them.
+
+    `ratio` overrides the headline's trips-per-person-per-day figure without
+    touching the curve itself, e.g. Wave 2's headline excludes weekend days with
+    10+ trips (likely logging artefacts) while the plotted curve keeps them."""
     grid, curve, n = trips_per_hour(trips)
     fig, ax = figure(figsize=(12, 6.2))
     fig.subplots_adjust(top=0.89, bottom=0.17, left=0.08, right=0.97)
@@ -187,8 +205,10 @@ def chart_start_times(trips, pdays, title, out):
     style(ax, title, "Hour of day", "Trips starting per hour")
     hour_axis(ax)
     ax.set_ylim(0, curve.max() * 1.16)
+    if ratio is None:
+        ratio = adjusted_trips(trips) / len(pdays)
     headline(fig, f"{len(trips):,} trips   ·   "
-                  f"{adjusted_trips(trips) / len(pdays):.2f} trips per person per day")
+                  f"{ratio:.2f} trips per person per day")
     save(fig, out)
     plt.close(fig)
 
@@ -375,9 +395,11 @@ def main() -> None:
     days = df.dropna(subset=["accessCode", "start_date"])[
         ["accessCode", "start_date", "_weekday"]].drop_duplicates()
 
+    ratio = (person_day_ratio_excluding_heavy_weekends(trips, days)
+             if WAVE == "Wave2" else None)
     chart_start_times(trips, days,
                       f"Trip start times, {LABEL}, all days",
-                      f"{OUT_DIR}/start_times_cleaned.png")
+                      f"{OUT_DIR}/start_times_cleaned.png", ratio=ratio)
     wd = trips[trips["_weekday"] < 5]
     chart_start_times(wd, days[days["_weekday"] < 5],
                       f"Trip start times, {LABEL}, weekdays (Mon-Fri)",
