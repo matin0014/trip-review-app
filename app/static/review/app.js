@@ -184,7 +184,7 @@ $('bDistributions').onclick = async ()=>{
  if(window.pywebview && window.pywebview.api){
   const r = await window.pywebview.api.save_distributions(window.SID);
   if(r.ok) alert(`Saved to ${r.path}`);
-  else if(!r.cancelled) alert(`Distributions PDF failed: ${r.error}`);
+  else if(!r.cancelled) alert(`Distributions failed: ${r.error}`);
   return;
  }
  window.location.href = `/api/${window.SID}/distributions`;

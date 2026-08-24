@@ -69,7 +69,7 @@
  <div class="card">
   <h2>Generate distributions</h2>
   <input type="file" id="distFile" accept=".xlsx" style="display:block;margin-bottom:10px">
-  <button id="distGo" type="button" disabled>Generate PDF</button>
+  <button id="distGo" type="button" disabled>Generate charts</button>
  </div>
 </div>
 
@@ -172,7 +172,7 @@
   if(!$('recent').children.length) $('recentCard').style.display='none';
  };
 
- // --- distributions PDF from an already-cleaned file (no session) ---
+ // --- distributions charts from an already-cleaned file (no session) ---
  const distFile=$('distFile'), distGo=$('distGo');
  distFile.onchange=()=>{distGo.disabled=!distFile.files[0];};
  distGo.onclick=async ()=>{
@@ -183,7 +183,7 @@
    // Same desktop-window download limitation as the main upload flow doesn't
    // hit (that one navigates to a new page instead of downloading a file) --
    // this one produces a file, so it needs the same pywebview Save As path
-   // the session-side "Generate export"/"Distributions PDF" buttons use.
+   // the session-side "Generate export"/"Distributions" buttons use.
    if(window.pywebview && window.pywebview.api){
     const res=await fetch('/api/distributions/from_file/build',{method:'POST',body:fd});
     if(!res.ok){alert(await res.text()); return;}
@@ -196,10 +196,10 @@
     if(!res.ok){alert(await res.text()); return;}
     const blob=await res.blob();
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-    a.download='trip_review_distributions.pdf'; a.click();
+    a.download='trip_review_distributions.zip'; a.click();
    }
   } finally {
-   distGo.disabled=false; distGo.textContent='Generate PDF';
+   distGo.disabled=false; distGo.textContent='Generate charts';
   }
  };
 </script>

@@ -1,4 +1,4 @@
-"""Integration tests for the distributions PDF: the pure builder functions
+"""Integration tests for the distributions ZIP: the pure builder functions
 (session-live-state and arbitrary-DataFrame cases) plus the three Flask
 endpoints that expose them. Mirrors test_start_times_api.py's style -- plain
 function calls where possible, the Flask test client for the endpoints, no
@@ -72,39 +72,57 @@ def client(tmp_path, monkeypatch):
     state.clear()
 
 
-def _assert_pdf(data: bytes, min_size: int = 5000) -> None:
-    assert data[:5] == b"%PDF-"
+# every chart the builder is expected to write, so a chart silently dropping
+# out of the set fails here rather than shipping a short archive
+EXPECTED_PNGS = {
+    "start_times.png", "start_times_weekday.png", "start_times_by_weekday.png",
+    "activity_duration.png", "activity_by_purpose_episode.png",
+    "activity_by_purpose.png",
+    "days_per_participant.png", "modes.png",
+}
+
+
+def _assert_zip(data: bytes, min_size: int = 5000) -> None:
+    import zipfile
+
+    assert data[:2] == b"PK"
     assert len(data) > min_size
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        names = set(zf.namelist())
+        assert names == EXPECTED_PNGS, names
+        # a zero-byte member would still satisfy a name check
+        for info in zf.infolist():
+            assert info.file_size > 1000, info.filename
 
 
-def test_build_distributions_pdf_from_dataframe(tmp_path):
+def test_build_distributions_zip_from_dataframe(tmp_path):
     df = pd.DataFrame(cleaned_rows(), columns=CLEANED_COLS)
-    out = str(tmp_path / "dist.pdf")
-    result = distributions.build_distributions_pdf(df, out)
+    out = str(tmp_path / "dist.zip")
+    result = distributions.build_distributions_zip(df, out)
     assert result == out
-    _assert_pdf(open(out, "rb").read())
+    _assert_zip(open(out, "rb").read())
 
 
-def test_build_distributions_pdf_missing_columns(tmp_path):
+def test_build_distributions_zip_missing_columns(tmp_path):
     df = pd.DataFrame(cleaned_rows(), columns=CLEANED_COLS).drop(columns=["trip_id"])
     with pytest.raises(ValueError, match="missing columns"):
-        distributions.build_distributions_pdf(df, str(tmp_path / "dist.pdf"))
+        distributions.build_distributions_zip(df, str(tmp_path / "dist.zip"))
 
 
-def test_build_distributions_pdf_for_session(client, tmp_path):
+def test_build_distributions_zip_for_session(client, tmp_path):
     _, sid = client
-    out = str(tmp_path / "dist.pdf")
-    result = distributions.build_distributions_pdf_for_session(sid, out)
+    out = str(tmp_path / "dist.zip")
+    result = distributions.build_distributions_zip_for_session(sid, out)
     assert result == out
-    _assert_pdf(open(out, "rb").read())
+    _assert_zip(open(out, "rb").read())
 
 
 def test_api_distributions_endpoint(client):
     c, sid = client
     r = c.get(f"/api/{sid}/distributions")
     assert r.status_code == 200
-    assert r.content_type.startswith("application/pdf")
-    _assert_pdf(r.data)
+    assert r.content_type.startswith("application/zip")
+    _assert_zip(r.data)
 
 
 def test_api_distributions_unknown_session_404(client):
@@ -125,8 +143,8 @@ def test_api_distributions_from_file_endpoint(client):
     r = c.post("/api/distributions/from_file", data=data,
               content_type="multipart/form-data")
     assert r.status_code == 200
-    assert r.content_type.startswith("application/pdf")
-    _assert_pdf(r.data)
+    assert r.content_type.startswith("application/zip")
+    _assert_zip(r.data)
 
 
 def test_api_distributions_from_file_build_endpoint(client):
@@ -138,7 +156,7 @@ def test_api_distributions_from_file_build_endpoint(client):
     path = r.get_json()["path"]
     import os
     assert os.path.isfile(path)
-    _assert_pdf(open(path, "rb").read())
+    _assert_zip(open(path, "rb").read())
 
 
 def test_api_distributions_from_file_bad_columns(client):

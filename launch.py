@@ -118,14 +118,14 @@ class Api:
         try:
             from app import distributions
             tmp_dir = tempfile.mkdtemp(prefix="triprev_dist_")
-            out = os.path.join(tmp_dir, "distributions.pdf")
-            distributions.build_distributions_pdf_for_session(sid, out)
+            out = os.path.join(tmp_dir, "distributions.zip")
+            distributions.build_distributions_zip_for_session(sid, out)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
         result = webview.windows[0].create_file_dialog(
-            webview.FileDialog.SAVE, save_filename="trip_review_distributions.pdf",
-            file_types=("PDF files (*.pdf)",))
+            webview.FileDialog.SAVE, save_filename="trip_review_distributions.zip",
+            file_types=("Zip files (*.zip)",))
         dest = None
         if result:
             dest = result[0] if isinstance(result, (list, tuple)) else result
@@ -133,21 +133,21 @@ class Api:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": True, "path": dest} if dest else {"ok": False, "cancelled": True}
 
-    def save_distributions_from_path(self, server_pdf_path: str) -> dict:
+    def save_distributions_from_path(self, server_zip_path: str) -> dict:
         """Standalone case (no session), step 2: the page already POSTed the
-        loaded file to /api/distributions/from_file/build and built the PDF
+        loaded file to /api/distributions/from_file/build and built the ZIP
         server-side, since a raw File object can't cross this JS bridge -- this
         call only does the Save As dialog for the path that step handed back.
         The temp-dir prefix check is defense against a stray call, not a real
         trust boundary (this is a local single-user app)."""
-        real = os.path.realpath(server_pdf_path)
+        real = os.path.realpath(server_zip_path)
         if (not real.startswith(os.path.realpath(tempfile.gettempdir()))
                 or not os.path.isfile(real)):
             return {"ok": False, "error": "invalid or expired path"}
 
         result = webview.windows[0].create_file_dialog(
-            webview.FileDialog.SAVE, save_filename="trip_review_distributions.pdf",
-            file_types=("PDF files (*.pdf)",))
+            webview.FileDialog.SAVE, save_filename="trip_review_distributions.zip",
+            file_types=("Zip files (*.zip)",))
         dest = None
         if result:
             dest = result[0] if isinstance(result, (list, tuple)) else result

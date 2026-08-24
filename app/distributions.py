@@ -1,7 +1,7 @@
-"""Distributions PDF: the 8 QC charts for a cleaned dataset, as one file.
+"""Distributions ZIP: the QC charts for a cleaned dataset, one PNG each.
 
-Responsibility: turn a cleaned-file-shaped DataFrame into a single dark-theme
-PDF, from either a live session's current state or an arbitrary loaded
+Responsibility: turn a cleaned-file-shaped DataFrame into a ZIP of PNG charts,
+from either a live session's current state or an arbitrary loaded
 `cleaned.xlsx`. Ported (not imported) from the dev-only `analysis/chartkit.py`
 and `analysis/final_charts.py` -- `analysis/` is not bundled by PyInstaller, so
 nothing in the shipped app can import from it (see the comment on this in
@@ -31,21 +31,20 @@ REQUIRED_COLUMNS = {"trip_id", "mode_of_travel", "purpose_of_travel", "start_dat
                     "start_time", "end_date", "end_time", "accessCode"}
 
 # --- ink (ported from analysis/chartkit.py) ---------------------------------
-# Dark surface. Every text, grid and spine colour is set explicitly against it:
-# matplotlib's own defaults are all near-black and would vanish here.
-SURFACE = "#0f1117"
-INK, MUTED, FAINT, GRID = "#f2f5f9", "#9aa4b8", "#5b6478", "#252b39"
+# White surface. Every text, grid and spine colour is still set explicitly:
+# matplotlib's defaults assume a white ground too, but leaving any of them
+# implicit means a later theme change silently breaks them.
+SURFACE = "#ffffff"
+INK, MUTED, FAINT, GRID = "#12151b", "#5b6478", "#c3c8d3", "#e5e7eb"
 # One series only (a single dataset, not a wave-vs-wave comparison), so ACCENT
 # is used purely as a within-series highlight -- the "6h+" overflow bar, the
-# >7-days bars -- never as a second identity-bearing series, which is the only
-# case chartkit's own pink+green colour-blind caveat actually warns about.
-SERIES, ACCENT, MISSING = "#39ff14", "#ff9ecb", "#6b7488"
+# >7-days bars -- never as a second identity-bearing series.
+SERIES, ACCENT, MISSING = "#16a34a", "#d97706", "#8b93a7"
 
 _INVISIBLE = re.compile(r"[​‌‍﻿\xa0]")
 _TZ = re.compile(r"([+-]\d{2}:?\d{2})$")
 _PAREN = re.compile(r"\s*\([^)]*\)\s*$")
 
-TRANSIT_MODES = {"Transit", "Transit Bus", "SkyTrain", "SeaBus"}
 STOP_PURPOSE = "Travel to transit stop"
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday"]
@@ -59,7 +58,7 @@ EXCLUDED_PURPOSES = {"Returning Home", "Not recorded"}
 # --- styling helpers (ported from analysis/chartkit.py) --------------------
 
 def _figure(*args, **kwargs):
-    """`plt.subplots` with the dark ground already painted onto figure and axes."""
+    """`plt.subplots` with the ground already painted onto figure and axes."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(*args, **kwargs)
@@ -69,10 +68,25 @@ def _figure(*args, **kwargs):
     return fig, ax
 
 
-def _save(fig, pdf):
-    """`PdfPages.savefig` defaults to a white ground regardless of the figure's
-    own, which would frame every dark chart in a bright border on the page."""
-    pdf.savefig(fig, facecolor=SURFACE)
+def _png_saver(out_dir: str):
+    """Returns ``save(fig, name)``, writing one PNG per chart into `out_dir`.
+
+    `savefig` defaults to a white ground regardless of the figure's own, so the
+    facecolor is passed explicitly: that is a no-op while SURFACE is white, and
+    the thing that keeps the export correct if it ever is not again. Each figure
+    is closed as it is written, so building a whole set never holds eight open
+    figures in matplotlib's global registry.
+    """
+    import os
+    import matplotlib.pyplot as plt
+
+    def save(fig, name: str) -> str:
+        path = os.path.join(out_dir, name)
+        fig.savefig(path, dpi=170, facecolor=SURFACE)
+        plt.close(fig)
+        return path
+
+    return save
 
 
 def _style(ax, title=None, xlabel=None, ylabel=None, axis="y"):
@@ -164,22 +178,24 @@ def _trips_per_hour(trips, bw: float = 0.7):
 
 def _collapse_count(day) -> int:
     """Trips on one person-day belonging to one JOURNEY counted once:
-    consecutive shopping; a Walk for Recreation then a Walk Returning Home; a
-    trip to a transit stop then the transit ride."""
+    consecutive shopping; a Walk for Recreation then a Walk Returning Home. A
+    trip whose purpose is travel to a transit stop is not counted at all: it
+    exists only to reach the transit ride that follows, not as a trip in its
+    own right."""
     rows = day.to_dict("records")
     n = i = 0
     while i < len(rows):
         cur = rows[i]
         nxt = rows[i + 1] if i + 1 < len(rows) else None
+        if cur["_purpose"] == STOP_PURPOSE:
+            i += 1
+            continue
         if cur["_purpose"] == "Shopping":
             while i + 1 < len(rows) and rows[i + 1]["_purpose"] == "Shopping":
                 i += 1
         elif (cur["_mode"] == "Walk" and cur["_purpose"] == "Recreation"
               and nxt is not None and nxt["_mode"] == "Walk"
               and nxt["_purpose"] == "Returning Home"):
-            i += 1
-        elif (cur["_purpose"] == STOP_PURPOSE
-              and nxt is not None and nxt["_mode"] in TRANSIT_MODES):
             i += 1
         n += 1
         i += 1
@@ -216,7 +232,7 @@ def _activity_records(trips):
 
 # --- charts ------------------------------------------------------------------
 
-def _chart_start_times(trips, pdays, title, pdf):
+def _chart_start_times(trips, pdays, title, save, name):
     """Smoothed, not binned -- see `_circular_kde`'s docstring for why."""
     import numpy as np
 
@@ -242,12 +258,10 @@ def _chart_start_times(trips, pdays, title, pdf):
     n_days = len(pdays) or 1
     _headline(fig, f"{len(trips):,} trips   ·   "
                   f"{_adjusted_trips(trips) / n_days:.2f} trips per person per day")
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, name)
 
 
-def _chart_start_times_by_weekday(trips, pdays, pdf):
+def _chart_start_times_by_weekday(trips, pdays, save):
     """Seven panels on ONE shared y-scale: the point is comparing days, which a
     per-panel scale would quietly defeat."""
     fig, axes = _figure(2, 4, figsize=(15, 7.6), sharey=True, sharex=True)
@@ -280,12 +294,10 @@ def _chart_start_times_by_weekday(trips, pdays, pdf):
                  ha="left", y=0.965, weight="600")
     _headline(fig, f"{len(trips):,} trips   ·   shared vertical scale, so panels "
                   f"compare directly", y=0.045, x=0.05)
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, "start_times_by_weekday.png")
 
 
-def _chart_activity_hist(recs, pdf):
+def _chart_activity_hist(recs, save):
     import numpy as np
 
     # Cut at 6h rather than 12: beyond about three hours every bar is a flat
@@ -317,12 +329,10 @@ def _chart_activity_hist(recs, pdf):
     under_hour = (hours < 1).mean() if len(hours) else 0.0
     _headline(fig, f"{len(hours):,} activities   ·   median "
                   f"{med * 60:.0f} min   ·   {under_hour:.0%} under an hour")
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, "activity_duration.png")
 
 
-def _purpose_bars(series, counts, title, xlabel, pdf, headline_text):
+def _purpose_bars(series, counts, title, xlabel, save, name, headline_text):
     order = series.sort_values(ascending=True)
     fig, ax = _figure(figsize=(11, 7.4))
     fig.subplots_adjust(top=0.91, bottom=0.13, left=0.30, right=0.97)
@@ -334,17 +344,15 @@ def _purpose_bars(series, counts, title, xlabel, pdf, headline_text):
     _style(ax, title, xlabel, axis="x")
     ax.set_xlim(0, order.max() * 1.28 if order.max() > 0 else 1)
     _headline(fig, headline_text)
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, name)
 
 
-def _chart_activity_by_purpose(recs, pdf):
+def _chart_activity_by_purpose(recs, save):
     recs = recs[~recs["purpose"].isin(EXCLUDED_PURPOSES)]
     episode = recs.groupby("purpose")["hours"].mean()
     n_ep = recs.groupby("purpose")["hours"].size()
     _purpose_bars(episode, n_ep, "Average activity duration per episode, by purpose",
-                  "Hours per episode", pdf,
+                  "Hours per episode", save, "activity_by_purpose_episode.png",
                   f"{len(recs):,} episodes   ·   overall mean "
                   f"{recs['hours'].mean():.1f} h per episode" if len(recs) else "No activities")
 
@@ -358,12 +366,13 @@ def _chart_activity_by_purpose(recs, pdf):
     n_days = per_day.groupby("purpose")["hours"].size()
     n_person_days = len(recs[["accessCode", "start_date"]].drop_duplicates())
     _purpose_bars(daily, n_days, "Average hours per day spent on each activity, by purpose",
-                  "Hours per day on which the activity occurred", pdf,
+                  "Hours per day on which the activity occurred", save,
+                  "activity_by_purpose.png",
                   f"{n_person_days:,} person-days   ·   each purpose averaged only "
                   f"over the days it occurred")
 
 
-def _chart_days_per_participant(days, pdf):
+def _chart_days_per_participant(days, save):
     per_person = days.groupby("accessCode").size()
     counts = per_person.value_counts().sort_index()
     fig, ax = _figure(figsize=(11, 6.0))
@@ -379,12 +388,10 @@ def _chart_days_per_participant(days, pdf):
     n_people = len(per_person) or 1
     _headline(fig, f"{per_person.mean():.2f} days per participant   ·   {over7} of "
                   f"{n_people} ({over7 / n_people:.0%}) recorded more than 7 days")
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, "days_per_participant.png")
 
 
-def _chart_modes(trips, pdf):
+def _chart_modes(trips, save):
     modes = trips["_mode"].replace("", "Not recorded")
     counts = modes.value_counts().sort_values(ascending=True)
     total = int(counts.sum()) or 1
@@ -401,22 +408,30 @@ def _chart_modes(trips, pdf):
     car = int(counts.get("Auto Driver", 0) + counts.get("Auto Passenger", 0))
     _headline(fig, f"{total:,} trips   ·   {car / total:.0%} by car   ·   "
                   f"{counts.get('Walk', 0) / total:.0%} on foot")
-    _save(fig, pdf)
-    import matplotlib.pyplot as plt
-    plt.close(fig)
+    save(fig, "modes.png")
 
 
 # --- entry points ------------------------------------------------------------
 
-def build_distributions_pdf(df, out_path: str) -> str:
-    """Render the 8-chart dark-theme distributions PDF from a cleaned-file-
-    shaped DataFrame to `out_path`. Raises ValueError if the required columns
-    aren't present -- a friendly failure instead of a KeyError three helper
-    functions deep, e.g. if this is pointed at a differently-shaped export."""
+def build_distributions_zip(df, out_path: str) -> str:
+    """Write the distribution charts as a ZIP of PNGs at `out_path`.
+
+    One PNG per chart rather than one multi-page PDF: a reader wanting a single
+    chart in a slide or a document can take it straight out of the archive,
+    which a PDF page cannot give them without a screenshot.
+
+    Raises ValueError if the required columns aren't present -- a friendly
+    failure instead of a KeyError three helper functions deep, e.g. if this is
+    pointed at a differently-shaped export.
+    """
+    import os
+    import shutil
+    import tempfile
+    import zipfile
+
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")  # headless: write a file, never try to display
-    from matplotlib.backends.backend_pdf import PdfPages
 
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
@@ -437,20 +452,33 @@ def build_distributions_pdf(df, out_path: str) -> str:
         ["accessCode", "start_date", "_weekday"]].drop_duplicates()
     recs = _activity_records(trips)
 
-    with PdfPages(out_path) as pdf:
-        _chart_start_times(trips, days, "Trip start times, all days", pdf)
+    # Charts are rendered into a scratch directory and zipped at the end, so a
+    # failure part-way through leaves no half-written archive at `out_path`.
+    tmp_dir = tempfile.mkdtemp(prefix="tripreview_dist_")
+    try:
+        save = _png_saver(tmp_dir)
+        _chart_start_times(trips, days, "Trip start times, all days", save,
+                           "start_times.png")
         wd = trips[trips["_weekday"] < 5]
         _chart_start_times(wd, days[days["_weekday"] < 5],
-                           "Trip start times, weekdays (Mon-Fri)", pdf)
-        _chart_start_times_by_weekday(trips, days, pdf)
-        _chart_activity_hist(recs, pdf)
-        _chart_activity_by_purpose(recs, pdf)
-        _chart_days_per_participant(days[["accessCode", "start_date"]].drop_duplicates(), pdf)
-        _chart_modes(trips, pdf)
+                           "Trip start times, weekdays (Mon-Fri)", save,
+                           "start_times_weekday.png")
+        _chart_start_times_by_weekday(trips, days, save)
+        _chart_activity_hist(recs, save)
+        _chart_activity_by_purpose(recs, save)
+        _chart_days_per_participant(
+            days[["accessCode", "start_date"]].drop_duplicates(), save)
+        _chart_modes(trips, save)
+
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name in sorted(os.listdir(tmp_dir)):
+                zf.write(os.path.join(tmp_dir, name), arcname=name)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return out_path
 
 
-def build_distributions_pdf_for_session(sid: str, out_path: str) -> str:
+def build_distributions_zip_for_session(sid: str, out_path: str) -> str:
     """Session case: 'cleaned' is the reviewer's CURRENT live state, reusing
     `generate.generate_cleaned_and_dofile` so it is never computed a second,
     possibly-divergent way."""
@@ -458,4 +486,4 @@ def build_distributions_pdf_for_session(sid: str, out_path: str) -> str:
     from app import generate as _generate
 
     cleaned_path, _dofile_path = _generate.generate_cleaned_and_dofile(sid)
-    return build_distributions_pdf(pd.read_excel(cleaned_path), out_path)
+    return build_distributions_zip(pd.read_excel(cleaned_path), out_path)

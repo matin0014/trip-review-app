@@ -763,22 +763,25 @@ def create_app() -> Flask:
     @app.get("/api/<sid>/distributions")
     def api_distributions(sid):
         """Plain-browser dev fallback for the session case; the packaged app's
-        pywebview path calls distributions.build_distributions_pdf_for_session
+        pywebview path calls distributions.build_distributions_zip_for_session
         directly instead (see launch.py's Api.save_distributions)."""
         if not session.exists(sid):
             abort(404)
         from app import distributions
-        out = os.path.abspath(os.path.join(session.session_dir(sid), "distributions.pdf"))
+        out = os.path.abspath(os.path.join(session.session_dir(sid), "distributions.zip"))
         try:
-            distributions.build_distributions_pdf_for_session(sid, out)
+            distributions.build_distributions_zip_for_session(sid, out)
         except Exception as exc:
-            abort(500, f"could not build distributions PDF: {exc}")
-        return send_file(out, as_attachment=True,
-                         download_name="trip_review_distributions.pdf")
+            abort(500, f"could not build distributions ZIP: {exc}")
+        # mimetype pinned: the OS registry decides otherwise, and Windows
+        # answers application/x-zip-compressed where other platforms say
+        # application/zip
+        return send_file(out, as_attachment=True, mimetype="application/zip",
+                         download_name="trip_review_distributions.zip")
 
     @app.post("/api/distributions/from_file")
     def api_distributions_from_file():
-        """Standalone case (no session), plain-browser: build and return the PDF
+        """Standalone case (no session), plain-browser: build and return the ZIP
         bytes in one request."""
         file = request.files.get("file")
         if file is None or not file.filename:
@@ -792,16 +795,16 @@ def create_app() -> Flask:
             df = pd.read_excel(file)
         except Exception as exc:
             abort(400, f"could not read workbook: {exc}")
-        fd, tmp_path = tempfile.mkstemp(prefix="triprev_dist_", suffix=".pdf")
+        fd, tmp_path = tempfile.mkstemp(prefix="triprev_dist_", suffix=".zip")
         os.close(fd)
         try:
-            distributions.build_distributions_pdf(df, tmp_path)
+            distributions.build_distributions_zip(df, tmp_path)
         except ValueError as exc:
             abort(400, str(exc))
         except Exception as exc:
-            abort(500, f"could not build distributions PDF: {exc}")
-        return send_file(tmp_path, as_attachment=True,
-                         download_name="trip_review_distributions.pdf")
+            abort(500, f"could not build distributions ZIP: {exc}")
+        return send_file(tmp_path, as_attachment=True, mimetype="application/zip",
+                         download_name="trip_review_distributions.zip")
 
     @app.post("/api/distributions/from_file/build")
     def api_distributions_from_file_build():
@@ -823,13 +826,13 @@ def create_app() -> Flask:
         except Exception as exc:
             abort(400, f"could not read workbook: {exc}")
         tmp_dir = tempfile.mkdtemp(prefix="triprev_dist_")
-        out = os.path.join(tmp_dir, "distributions.pdf")
+        out = os.path.join(tmp_dir, "distributions.zip")
         try:
-            distributions.build_distributions_pdf(df, out)
+            distributions.build_distributions_zip(df, out)
         except ValueError as exc:
             abort(400, str(exc))
         except Exception as exc:
-            abort(500, f"could not build distributions PDF: {exc}")
+            abort(500, f"could not build distributions ZIP: {exc}")
         return jsonify({"path": out})
 
     return app
