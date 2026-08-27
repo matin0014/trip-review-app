@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from final_charts import collapse_count
 
 BASE = (r"P:/UiTR/Shared Folder/1. Current Student/Matin/"
-        r"4. Smartphone App Data Cleaning")
+        r"4. Smartphone App Data Cleaning/Raw")
 DIST = r"C:/Users/matin001/projects/TripReview/final/distributions"
 OUT_DIR = f"{DIST}/problem"
 AFTER_DIR = f"{DIST}/after"
